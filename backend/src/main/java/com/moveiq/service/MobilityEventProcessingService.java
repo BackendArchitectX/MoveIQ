@@ -35,14 +35,9 @@ public class MobilityEventProcessingService {
         this.traces = traces;
         this.consumerGroup = consumerGroup;
 
-        this.processedCounter =
-                meterRegistry.counter("moveiq.events.processed");
-
-        this.duplicateCounter =
-                meterRegistry.counter("moveiq.events.duplicate");
-
-        this.signalCounter =
-                meterRegistry.counter("moveiq.signals.detected");
+        this.processedCounter = meterRegistry.counter("moveiq.events.processed");
+        this.duplicateCounter = meterRegistry.counter("moveiq.events.duplicate");
+        this.signalCounter = meterRegistry.counter("moveiq.signals.detected");
     }
 
     @Transactional
@@ -52,7 +47,6 @@ public class MobilityEventProcessingService {
                 consumerGroup,
                 event.businessUnit(),
                 event.eventId())) {
-
             duplicateCounter.increment();
             return;
         }
@@ -73,14 +67,33 @@ public class MobilityEventProcessingService {
                         "affectedEmployees", event.affectedEmployees(),
                         "delayMinutes", event.delayMinutes()));
 
-        var detected = detector.detect(event);
+        DetectionEvaluation evaluation = detector.evaluate(event);
 
-        if (detected.isEmpty()) {
+        traces.record(
+                null,
+                null,
+                event.eventId(),
+                scopeKey(event),
+                "SENSE",
+                "WINDOW_UPDATED",
+                event.occurredAt(),
+                evaluation.thresholdCrossed()
+                        ? "Detection window reached its threshold"
+                        : "Detection window updated",
+                Map.of(
+                        "windowEventCount", evaluation.windowEventCount(),
+                        "threshold", evaluation.threshold(),
+                        "affectedEmployees", evaluation.affectedEmployees(),
+                        "delayMinutes", evaluation.delayMinutes(),
+                        "thresholdCrossed", evaluation.thresholdCrossed(),
+                        "includedInWindow", evaluation.includedInWindow(),
+                        "watermarkEpochMillis", evaluation.watermarkEpochMillis()));
+
+        if (evaluation.signal().isEmpty()) {
             return;
         }
 
-        var signal = detected.get();
-
+        var signal = evaluation.signal().orElseThrow();
         signalCounter.increment();
 
         traces.record(
@@ -91,7 +104,7 @@ public class MobilityEventProcessingService {
                 "SENSE",
                 "SIGNAL_DETECTED",
                 signal.detectedAt(),
-                "Distributed detection threshold reached",
+                "Distributed detection threshold crossed",
                 Map.of(
                         "signalType", signal.signalType(),
                         "windowEventCount", signal.windowEventCount(),
