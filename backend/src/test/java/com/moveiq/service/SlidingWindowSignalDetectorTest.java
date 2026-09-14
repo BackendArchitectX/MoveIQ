@@ -29,7 +29,7 @@ class SlidingWindowSignalDetectorTest {
 
         assertTrue(signal.isPresent());
         assertEquals("MOBILITY_DISRUPTION", signal.get().signalType());
-        assertEquals(3, signal.get().windowCount());
+        assertEquals(3, signal.get().windowEventCount());
         verify(zset).add(anyString(), eq("evt-3"), anyDouble());
         verify(zset).removeRangeByScore(anyString(), anyDouble(), anyDouble());
     }
