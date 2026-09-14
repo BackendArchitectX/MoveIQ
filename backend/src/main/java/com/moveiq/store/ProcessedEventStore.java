@@ -1,6 +1,7 @@
 package com.moveiq.store;
 
 import java.time.Instant;
+import java.sql.Timestamp;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
@@ -22,7 +23,7 @@ public class ProcessedEventStore {
                 consumerGroup,
                 businessUnit,
                 eventId,
-                Instant.now());
+                Timestamp.from(Instant.now()));
         return changed == 1;
     }
 }

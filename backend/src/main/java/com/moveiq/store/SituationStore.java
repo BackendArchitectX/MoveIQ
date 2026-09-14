@@ -4,6 +4,7 @@ import com.moveiq.api.dto.DetectedSignal;
 import com.moveiq.domain.SituationEntity;
 import com.moveiq.repository.SituationRepository;
 import java.time.Instant;
+import java.sql.Timestamp;
 import java.util.UUID;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -20,7 +21,7 @@ public class SituationStore {
 
     public SituationEntity getOrCreate(String correlationKey, DetectedSignal signal) {
         UUID id = UUID.randomUUID();
-        Instant now = Instant.now();
+        Timestamp now = Timestamp.from(Instant.now());
         jdbc.update(
                 """
                 INSERT INTO moveiq.situation(

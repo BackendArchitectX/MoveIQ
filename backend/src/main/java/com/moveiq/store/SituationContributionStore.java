@@ -2,6 +2,7 @@ package com.moveiq.store;
 
 import com.moveiq.api.dto.DetectedSignal;
 import java.time.Instant;
+import java.sql.Timestamp;
 import java.util.UUID;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -27,7 +28,7 @@ public class SituationContributionStore {
                 signal.sourceEventId(),
                 signal.affectedEmployees(),
                 signal.delayMinutes(),
-                Instant.now());
+                Timestamp.from(Instant.now()));
         return changed == 1;
     }
 }
