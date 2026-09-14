@@ -42,7 +42,7 @@ export function ReasonPanel() {
             </div>
             {reason ? (
                 <>
-                    <strong className="event-type">{reason.recommendation.replaceAll('_', ' ')}</strong>
+                    <strong className="event-type">{reason.recommendation.split('_').join(' ')}</strong>
                     <div className="sense-metrics">
                         <div><span>Current delay</span><strong>{fmt(reason.currentAvgDelay, 'm')}</strong></div>
                         <div><span>Baseline</span><strong>{fmt(reason.baselineAvgDelay, 'm')}</strong></div>
