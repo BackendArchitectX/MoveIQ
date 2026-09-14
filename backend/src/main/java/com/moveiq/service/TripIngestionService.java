@@ -91,7 +91,9 @@ public class TripIngestionService {
                     if (batch.size() >= batchSize) flush(batch);
                 } catch (RuntimeException ex) {
                     rejected++;
-                    if (errors.size() < 20) errors.add(path.getFileName() + ":row=" + row.getRecordNumber() + ":" + ex.getMessage());
+                    if (errors.size() < 20) {
+                        errors.add(path.getFileName() + ":row=" + row.getRecordNumber() + ":" + ex.getMessage());
+                    }
                 }
             }
             flush(batch);
@@ -118,8 +120,10 @@ public class TripIngestionService {
                 blankToNull(value(row, h, "trip_direction")), first(row, h, "vendor_id", "vendor"),
                 longValue(value(row, h, "planned_start_epoch")), longValue(value(row, h, "planned_end_epoch")),
                 longValue(value(row, h, "actual_start_epoch")), longValue(value(row, h, "actual_end_epoch")),
-                intValue(value(row, h, "delay_minutes")), intValue(value(row, h, "planned_employee_cnt")),
-                intValue(value(row, h, "actual_employee_cnt")), intValue(value(row, h, "noshow_cnt"))
+                intValue(value(row, h, "delay_minutes")),
+                intValue(first(row, h, "planned_employee_cnt", "plannedemployee_cnt")),
+                intValue(first(row, h, "actual_employee_cnt", "actualemployee_cnt")),
+                intValue(first(row, h, "noshow_cnt", "no_show_cnt", "noshowcount"))
         };
     }
 

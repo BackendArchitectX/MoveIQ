@@ -4,6 +4,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
+import java.util.List;
 import java.util.UUID;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -25,19 +26,24 @@ public class EvidenceHashService {
                 """,
                 String.class,
                 situationId);
-        if (situation == null) throw new IllegalArgumentException("Situation not found: " + situationId);
+        if (situation == null) {
+            throw new IllegalArgumentException("Situation not found: " + situationId);
+        }
 
-        StringBuilder canonical = new StringBuilder(situation).append('\n');
-        jdbc.query(
+        List<String> contributions = jdbc.query(
                 """
                 SELECT source_event_id, affected_employees, delay_minutes
                 FROM moveiq.situation_contribution
                 WHERE situation_id = ?
                 ORDER BY source_event_id
                 """,
-                rs -> canonical.append(rs.getString(1)).append('|')
-                        .append(rs.getLong(2)).append('|').append(rs.getLong(3)).append('\n'),
+                (rs, rowNum) -> rs.getString("source_event_id") + "|"
+                        + rs.getLong("affected_employees") + "|"
+                        + rs.getLong("delay_minutes"),
                 situationId);
+
+        StringBuilder canonical = new StringBuilder(situation).append('\n');
+        contributions.forEach(row -> canonical.append(row).append('\n'));
         return sha256(canonical.toString());
     }
 
