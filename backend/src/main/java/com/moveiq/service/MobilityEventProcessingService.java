@@ -31,14 +31,12 @@ public class MobilityEventProcessingService {
             OperationTraceService traces,
             MeterRegistry meterRegistry,
             @Value("${spring.kafka.consumer.group-id}") String consumerGroup) {
-
         this.processedEvents = processedEvents;
         this.detector = detector;
         this.situations = situations;
         this.reasoning = reasoning;
         this.traces = traces;
         this.consumerGroup = consumerGroup;
-
         this.processedCounter = meterRegistry.counter("moveiq.events.processed");
         this.duplicateCounter = meterRegistry.counter("moveiq.events.duplicate");
         this.signalCounter = meterRegistry.counter("moveiq.signals.detected");
@@ -52,7 +50,6 @@ public class MobilityEventProcessingService {
         }
 
         processedCounter.increment();
-
         traces.record(
                 null, null, event.eventId(), scopeKey(event), "SENSE", "EVENT_ACCEPTED", event.occurredAt(),
                 "Mobility event accepted for distributed detection",
@@ -62,7 +59,6 @@ public class MobilityEventProcessingService {
                         "delayMinutes", event.delayMinutes()));
 
         DetectionEvaluation evaluation = detector.evaluate(event);
-
         traces.record(
                 null, null, event.eventId(), scopeKey(event), "SENSE", "WINDOW_UPDATED", event.occurredAt(),
                 evaluation.thresholdCrossed()
@@ -81,7 +77,6 @@ public class MobilityEventProcessingService {
 
         var signal = evaluation.signal().orElseThrow();
         signalCounter.increment();
-
         traces.record(
                 null, null, event.eventId(), scopeKey(event), "SENSE", "SIGNAL_DETECTED", signal.detectedAt(),
                 "Distributed detection threshold crossed",
@@ -99,8 +94,8 @@ public class MobilityEventProcessingService {
         reasonEvidence.put("affectedEmployees", situation.getAffectedEmployees());
         reasonEvidence.put("delayMinutes", situation.getDelayMinutes());
         reasonEvidence.put("currentAvgDelay", reason.currentAvgDelay());
-        reasonEvidence.put("baselineAvgDelay", reason.baselineAvgDelay());
-        reasonEvidence.put("deltaPct", reason.deltaPct());
+        if (reason.baselineAvgDelay() != null) reasonEvidence.put("baselineAvgDelay", reason.baselineAvgDelay());
+        if (reason.deltaPct() != null) reasonEvidence.put("deltaPct", reason.deltaPct());
         reasonEvidence.put("currentSampleSize", reason.currentSampleSize());
         reasonEvidence.put("baselineSampleSize", reason.baselineSampleSize());
         reasonEvidence.put("coveragePct", reason.coveragePct());
