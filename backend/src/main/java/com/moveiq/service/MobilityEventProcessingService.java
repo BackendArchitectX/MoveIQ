@@ -4,15 +4,18 @@ import com.moveiq.api.dto.MobilityEvent;
 import com.moveiq.store.ProcessedEventStore;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
+import java.util.Map;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class MobilityEventProcessingService {
+
     private final ProcessedEventStore processedEvents;
     private final SlidingWindowSignalDetector detector;
     private final SituationService situations;
+    private final OperationTraceService traces;
     private final String consumerGroup;
     private final Counter processedCounter;
     private final Counter duplicateCounter;
@@ -22,28 +25,107 @@ public class MobilityEventProcessingService {
             ProcessedEventStore processedEvents,
             SlidingWindowSignalDetector detector,
             SituationService situations,
+            OperationTraceService traces,
             MeterRegistry meterRegistry,
             @Value("${spring.kafka.consumer.group-id}") String consumerGroup) {
+
         this.processedEvents = processedEvents;
         this.detector = detector;
         this.situations = situations;
+        this.traces = traces;
         this.consumerGroup = consumerGroup;
-        this.processedCounter = meterRegistry.counter("moveiq.events.processed");
-        this.duplicateCounter = meterRegistry.counter("moveiq.events.duplicate");
-        this.signalCounter = meterRegistry.counter("moveiq.signals.detected");
+
+        this.processedCounter =
+                meterRegistry.counter("moveiq.events.processed");
+
+        this.duplicateCounter =
+                meterRegistry.counter("moveiq.events.duplicate");
+
+        this.signalCounter =
+                meterRegistry.counter("moveiq.signals.detected");
     }
 
     @Transactional
     public void process(MobilityEvent event) {
-        if (!processedEvents.claim(consumerGroup, event.businessUnit(), event.eventId())) {
+
+        if (!processedEvents.claim(
+                consumerGroup,
+                event.businessUnit(),
+                event.eventId())) {
+
             duplicateCounter.increment();
             return;
         }
 
         processedCounter.increment();
-        detector.detect(event).ifPresent(signal -> {
-            signalCounter.increment();
-            situations.applySignal(signal);
-        });
+
+        traces.record(
+                null,
+                null,
+                event.eventId(),
+                scopeKey(event),
+                "SENSE",
+                "EVENT_ACCEPTED",
+                event.occurredAt(),
+                "Mobility event accepted for distributed detection",
+                Map.of(
+                        "eventType", event.eventType(),
+                        "affectedEmployees", event.affectedEmployees(),
+                        "delayMinutes", event.delayMinutes()));
+
+        var detected = detector.detect(event);
+
+        if (detected.isEmpty()) {
+            return;
+        }
+
+        var signal = detected.get();
+
+        signalCounter.increment();
+
+        traces.record(
+                null,
+                null,
+                event.eventId(),
+                scopeKey(event),
+                "SENSE",
+                "SIGNAL_DETECTED",
+                signal.detectedAt(),
+                "Distributed detection threshold reached",
+                Map.of(
+                        "signalType", signal.signalType(),
+                        "windowEventCount", signal.windowEventCount(),
+                        "affectedEmployees", signal.affectedEmployees(),
+                        "delayMinutes", signal.delayMinutes()));
+
+        var situation = situations.applySignal(signal);
+
+        traces.record(
+                null,
+                situation.getId(),
+                event.eventId(),
+                scopeKey(event),
+                "REASON",
+                "SITUATION_CORRELATED",
+                signal.detectedAt(),
+                "Signal correlated into durable operational situation",
+                Map.of(
+                        "situationType", situation.getSituationType(),
+                        "affectedEmployees", situation.getAffectedEmployees(),
+                        "delayMinutes", situation.getDelayMinutes()));
+    }
+
+    private String scopeKey(MobilityEvent event) {
+        return String.join(
+                "|",
+                safe(event.businessUnit()),
+                safe(event.office()),
+                safe(event.shift()),
+                safe(event.direction()),
+                safe(event.eventType()));
+    }
+
+    private String safe(String value) {
+        return value == null ? "_" : value;
     }
 }

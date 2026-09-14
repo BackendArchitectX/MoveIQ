@@ -62,7 +62,7 @@ public class SlidingWindowSignalDetector {
         int boundedCount = count > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) count;
         return new DetectedSignal(
                 e.eventId(), e.businessUnit(), type, e.office(), e.shift(), e.direction(),
-                e.affectedEmployees(), e.delayMinutes(), boundedCount, Instant.now());
+                e.affectedEmployees(), e.delayMinutes(), boundedCount, e.occurredAt());
     }
 
     private static String safe(String value) {
