@@ -15,7 +15,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class ReasoningService {
-    private static final String METHODOLOGY_VERSION = "reason-v1";
+    private static final String METHODOLOGY_VERSION = "reason-v2";
     private static final int CURRENT_WINDOW = 25;
     private static final int BASELINE_WINDOW = 100;
     private static final String EVENT_EPOCH =
@@ -62,13 +62,13 @@ public class ReasoningService {
                 """,
                 situation.getId(), signal.businessUnit(), signal.office(), signal.shift(), signal.direction(),
                 Timestamp.from(signal.detectedAt()), stats.currentAvgDelay(), stats.baselineAvgDelay(), deltaPct,
-                stats.currentCount(), stats.baselineCount(), coverage, trust, recommendation,
+                stats.currentEvidenceCount(), stats.baselineEvidenceCount(), coverage, trust, recommendation,
                 METHODOLOGY_VERSION, Timestamp.from(computedAt));
 
         return new ReasoningSnapshot(
                 situation.getId(), signal.businessUnit(), signal.office(), signal.shift(), signal.direction(),
                 signal.detectedAt(), stats.currentAvgDelay(), stats.baselineAvgDelay(), deltaPct,
-                stats.currentCount(), stats.baselineCount(), coverage, trust, recommendation,
+                stats.currentEvidenceCount(), stats.baselineEvidenceCount(), coverage, trust, recommendation,
                 METHODOLOGY_VERSION, computedAt);
     }
 
@@ -90,15 +90,13 @@ public class ReasoningService {
         String sql = """
                 WITH scoped AS (
                     SELECT
-                        GREATEST(COALESCE(
-                            reported_delay_minutes,
-                            CASE WHEN planned_end_epoch IS NOT NULL AND actual_end_epoch IS NOT NULL
-                                 THEN GREATEST((actual_end_epoch - planned_end_epoch) / 60, 0)
-                            END,
-                            0), 0)::double precision AS delay_minutes,
-                        CASE WHEN reported_delay_minutes IS NOT NULL
-                                  OR (planned_end_epoch IS NOT NULL AND actual_end_epoch IS NOT NULL)
-                             THEN 1 ELSE 0 END AS covered,
+                        CASE
+                            WHEN reported_delay_minutes IS NOT NULL
+                                THEN GREATEST(reported_delay_minutes, 0)::double precision
+                            WHEN planned_end_epoch IS NOT NULL AND actual_end_epoch IS NOT NULL
+                                THEN GREATEST((actual_end_epoch - planned_end_epoch) / 60.0, 0)::double precision
+                            ELSE NULL
+                        END AS delay_minutes,
                         ROW_NUMBER() OVER (
                             ORDER BY %s DESC, trip_id DESC) AS rn
                     FROM moveiq.trip
@@ -112,9 +110,9 @@ public class ReasoningService {
                 SELECT
                     COALESCE(AVG(delay_minutes) FILTER (WHERE rn <= ?), 0),
                     AVG(delay_minutes) FILTER (WHERE rn > ? AND rn <= ?),
-                    COUNT(*) FILTER (WHERE rn <= ?),
-                    COUNT(*) FILTER (WHERE rn > ? AND rn <= ?),
-                    COALESCE(SUM(covered) FILTER (WHERE rn <= ?), 0)
+                    COUNT(delay_minutes) FILTER (WHERE rn <= ?),
+                    COUNT(delay_minutes) FILTER (WHERE rn > ? AND rn <= ?),
+                    COUNT(*) FILTER (WHERE rn <= ?)
                 FROM scoped
                 """.formatted(EVENT_EPOCH, EVENT_EPOCH, EVENT_EPOCH);
 
@@ -147,21 +145,21 @@ public class ReasoningService {
 
     private String trust(ReasonStats stats) {
         double coverage = coverage(stats);
-        if (stats.currentCount() >= 10 && stats.baselineCount() >= 25 && coverage >= 80.0) return "HIGH";
-        if (stats.currentCount() >= 3 && stats.baselineCount() >= 10 && coverage >= 50.0) return "MEDIUM";
+        if (stats.currentEvidenceCount() >= 10 && stats.baselineEvidenceCount() >= 25 && coverage >= 80.0) return "HIGH";
+        if (stats.currentEvidenceCount() >= 3 && stats.baselineEvidenceCount() >= 10 && coverage >= 50.0) return "MEDIUM";
         return "LOW";
     }
 
     private String recommendation(ReasonStats stats) {
         double delta = Optional.ofNullable(deltaPct(stats.currentAvgDelay(), stats.baselineAvgDelay())).orElse(0.0);
-        if (stats.currentAvgDelay() >= 20.0 && delta >= 25.0) return "ESCALATE_VENDOR_AND_CAPACITY";
-        if (stats.currentAvgDelay() >= 10.0 && delta >= 15.0) return "INVESTIGATE_VENDOR";
+        if (stats.currentAvgDelay() >= 20.0 && delta >= 25.0) return "ESCALATE_CAPACITY_REVIEW";
+        if (stats.currentAvgDelay() >= 10.0 && delta >= 15.0) return "INVESTIGATE_SERVICE_PATTERN";
         return "MONITOR";
     }
 
     private double coverage(ReasonStats stats) {
-        if (stats.currentCount() == 0) return 0.0;
-        return (stats.coveredCurrentCount() * 100.0) / stats.currentCount();
+        if (stats.currentPopulationCount() == 0) return 0.0;
+        return (stats.currentEvidenceCount() * 100.0) / stats.currentPopulationCount();
     }
 
     private Double deltaPct(double current, Double baseline) {
@@ -182,7 +180,7 @@ public class ReasoningService {
     private record ReasonStats(
             double currentAvgDelay,
             Double baselineAvgDelay,
-            long currentCount,
-            long baselineCount,
-            long coveredCurrentCount) {}
+            long currentEvidenceCount,
+            long baselineEvidenceCount,
+            long currentPopulationCount) {}
 }
