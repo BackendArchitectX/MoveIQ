@@ -18,7 +18,6 @@ public class ReasoningService {
     private static final String METHODOLOGY_VERSION = "reason-v1";
     private static final int CURRENT_WINDOW = 25;
     private static final int BASELINE_WINDOW = 100;
-
     private static final String EVENT_EPOCH =
             "COALESCE(actual_start_epoch, planned_start_epoch, actual_end_epoch, planned_end_epoch)";
 
@@ -61,22 +60,10 @@ public class ReasoningService {
                     methodology_version = EXCLUDED.methodology_version,
                     computed_at = EXCLUDED.computed_at
                 """,
-                situation.getId(),
-                signal.businessUnit(),
-                signal.office(),
-                signal.shift(),
-                signal.direction(),
-                Timestamp.from(signal.detectedAt()),
-                stats.currentAvgDelay(),
-                stats.baselineAvgDelay(),
-                deltaPct,
-                stats.currentCount(),
-                stats.baselineCount(),
-                coverage,
-                trust,
-                recommendation,
-                METHODOLOGY_VERSION,
-                Timestamp.from(computedAt));
+                situation.getId(), signal.businessUnit(), signal.office(), signal.shift(), signal.direction(),
+                Timestamp.from(signal.detectedAt()), stats.currentAvgDelay(), stats.baselineAvgDelay(), deltaPct,
+                stats.currentCount(), stats.baselineCount(), coverage, trust, recommendation,
+                METHODOLOGY_VERSION, Timestamp.from(computedAt));
 
         return new ReasoningSnapshot(
                 situation.getId(), signal.businessUnit(), signal.office(), signal.shift(), signal.direction(),
@@ -100,7 +87,7 @@ public class ReasoningService {
 
     private ReasonStats computeStats(DetectedSignal signal) {
         long cutoff = signal.detectedAt().getEpochSecond();
-        return jdbc.queryForObject("""
+        String sql = """
                 WITH scoped AS (
                     SELECT
                         GREATEST(COALESCE(
@@ -113,14 +100,14 @@ public class ReasoningService {
                                   OR (planned_end_epoch IS NOT NULL AND actual_end_epoch IS NOT NULL)
                              THEN 1 ELSE 0 END AS covered,
                         ROW_NUMBER() OVER (
-                            ORDER BY """ + EVENT_EPOCH + " DESC, trip_id DESC) AS rn
+                            ORDER BY %s DESC, trip_id DESC) AS rn
                     FROM moveiq.trip
                     WHERE business_unit = ?
                       AND (? IS NULL OR office = ?)
                       AND (? IS NULL OR shift_type = ?)
                       AND (? IS NULL OR trip_direction = ?)
-                      AND " + EVENT_EPOCH + " IS NOT NULL
-                      AND " + EVENT_EPOCH + " <= ?
+                      AND %s IS NOT NULL
+                      AND %s <= ?
                 )
                 SELECT
                     COALESCE(AVG(delay_minutes) FILTER (WHERE rn <= ?), 0),
@@ -129,13 +116,12 @@ public class ReasoningService {
                     COUNT(*) FILTER (WHERE rn > ? AND rn <= ?),
                     COALESCE(SUM(covered) FILTER (WHERE rn <= ?), 0)
                 FROM scoped
-                """,
+                """.formatted(EVENT_EPOCH, EVENT_EPOCH, EVENT_EPOCH);
+
+        return jdbc.queryForObject(
+                sql,
                 (rs, rowNum) -> new ReasonStats(
-                        rs.getDouble(1),
-                        nullableDouble(rs, 2),
-                        rs.getLong(3),
-                        rs.getLong(4),
-                        rs.getLong(5)),
+                        rs.getDouble(1), nullableDouble(rs, 2), rs.getLong(3), rs.getLong(4), rs.getLong(5)),
                 signal.businessUnit(),
                 signal.office(), signal.office(),
                 signal.shift(), signal.shift(),
@@ -150,21 +136,12 @@ public class ReasoningService {
 
     private ReasoningSnapshot map(ResultSet rs, int rowNum) throws SQLException {
         return new ReasoningSnapshot(
-                rs.getObject("situation_id", UUID.class),
-                rs.getString("business_unit"),
-                rs.getString("office"),
-                rs.getString("shift"),
-                rs.getString("direction"),
-                rs.getTimestamp("event_time").toInstant(),
-                rs.getDouble("current_avg_delay"),
-                nullableDouble(rs, "baseline_avg_delay"),
-                nullableDouble(rs, "delta_pct"),
-                rs.getLong("current_sample_size"),
-                rs.getLong("baseline_sample_size"),
-                rs.getDouble("coverage_pct"),
-                rs.getString("trust_status"),
-                rs.getString("recommendation"),
-                rs.getString("methodology_version"),
+                rs.getObject("situation_id", UUID.class), rs.getString("business_unit"), rs.getString("office"),
+                rs.getString("shift"), rs.getString("direction"), rs.getTimestamp("event_time").toInstant(),
+                rs.getDouble("current_avg_delay"), nullableDouble(rs, "baseline_avg_delay"),
+                nullableDouble(rs, "delta_pct"), rs.getLong("current_sample_size"),
+                rs.getLong("baseline_sample_size"), rs.getDouble("coverage_pct"), rs.getString("trust_status"),
+                rs.getString("recommendation"), rs.getString("methodology_version"),
                 rs.getTimestamp("computed_at").toInstant());
     }
 
