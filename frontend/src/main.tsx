@@ -48,68 +48,162 @@ function formatEvidence(
         .join(' · ')
 }
 
+function evidenceNumber(
+    event: OperationTraceEvent | undefined,
+    key: string
+) {
+    const value = event?.evidence[key]
+    if (typeof value === 'number' && Number.isFinite(value)) {
+        return value
+    }
+    if (typeof value === 'string') {
+        const parsed = Number(value)
+        if (Number.isFinite(parsed)) {
+            return parsed
+        }
+    }
+    return null
+}
+
+function evidenceBoolean(
+    event: OperationTraceEvent | undefined,
+    key: string
+) {
+    const value = event?.evidence[key]
+    return value === true || value === 'true'
+}
+
+function SenseCard({
+    windowEvent,
+    fallbackEvent
+}: {
+    windowEvent?: OperationTraceEvent
+    fallbackEvent?: OperationTraceEvent
+}) {
+    const event = windowEvent ?? fallbackEvent
+    const count = evidenceNumber(windowEvent, 'windowEventCount')
+    const threshold = evidenceNumber(windowEvent, 'threshold')
+    const affected = evidenceNumber(windowEvent, 'affectedEmployees')
+    const delay = evidenceNumber(windowEvent, 'delayMinutes')
+    const crossed = evidenceBoolean(windowEvent, 'thresholdCrossed')
+    const included = evidenceBoolean(windowEvent, 'includedInWindow')
+
+    const boundedThreshold = threshold && threshold > 0
+        ? Math.min(Math.floor(threshold), 12)
+        : 0
+    const boundedCount = count == null
+        ? 0
+        : Math.max(0, Math.min(Math.floor(count), boundedThreshold || Math.floor(count)))
+    const progress = count != null && threshold != null && threshold > 0
+        ? Math.min(100, Math.max(0, (count / threshold) * 100))
+        : 0
+
+    return (
+        <article className={`stage-card stage-sense ${event ? 'stage-active' : 'stage-waiting'}`}>
+            <div className="stage-heading">
+                <span>SENSE</span>
+                <span className={`stage-status ${crossed ? 'status-detected' : ''}`}>
+                    {crossed ? 'THRESHOLD CROSSED' : event ? 'SENSING' : 'WAITING'}
+                </span>
+            </div>
+
+            {windowEvent && count != null && threshold != null ? (
+                <>
+                    <div className="sense-window-row">
+                        <div>
+                            <span className="sense-label">SLIDING WINDOW</span>
+                            <strong className="sense-count">{count} / {threshold}</strong>
+                        </div>
+                        <span className="sense-time">{formatTime(windowEvent.recordedAt)}</span>
+                    </div>
+
+                    <div
+                        className="sense-progress"
+                        role="progressbar"
+                        aria-label="Detection threshold progress"
+                        aria-valuemin={0}
+                        aria-valuemax={threshold}
+                        aria-valuenow={count}
+                    >
+                        <span style={{ width: `${progress}%` }} />
+                    </div>
+
+                    {boundedThreshold > 0 && (
+                        <div className="sense-steps" aria-hidden="true">
+                            {Array.from({ length: boundedThreshold }).map((_, index) => (
+                                <span
+                                    key={index}
+                                    className={index < boundedCount ? 'sense-step active' : 'sense-step'}
+                                />
+                            ))}
+                        </div>
+                    )}
+
+                    <div className="sense-metrics">
+                        <div>
+                            <span>Affected</span>
+                            <strong>{affected ?? '—'}</strong>
+                        </div>
+                        <div>
+                            <span>Delay evidence</span>
+                            <strong>{delay == null ? '—' : `${delay}m`}</strong>
+                        </div>
+                    </div>
+
+                    <p className="sense-scope" title={windowEvent.scopeKey ?? undefined}>
+                        {windowEvent.scopeKey ?? 'Unknown scope'}
+                    </p>
+
+                    {!included && (
+                        <small className="sense-late">
+                            Latest accepted event was outside the active event-time window.
+                        </small>
+                    )}
+                </>
+            ) : event ? (
+                <>
+                    <strong className="event-type">{event.eventType}</strong>
+                    <p>{event.summary}</p>
+                    <small>#{event.sequence} · {formatTime(event.recordedAt)}</small>
+                </>
+            ) : (
+                <p className="waiting-copy">
+                    Waiting for backend detection state.
+                </p>
+            )}
+        </article>
+    )
+}
+
 function App() {
-    const [traces, setTraces] = useState<
-        OperationTraceEvent[]
-    >([])
-
-    const [connection, setConnection] =
-        useState<ConnectionState>('CONNECTING')
-
+    const [traces, setTraces] = useState<OperationTraceEvent[]>([])
+    const [connection, setConnection] = useState<ConnectionState>('CONNECTING')
     const [followLive, setFollowLive] = useState(true)
-
-    const [selectedSequence, setSelectedSequence] =
-        useState<number | null>(null)
+    const [selectedSequence, setSelectedSequence] = useState<number | null>(null)
 
     const lastSequence = useRef(0)
     const buffering = useRef(true)
+    const pendingLive = useRef<OperationTraceEvent[]>([])
 
-    const pendingLive = useRef<
-        OperationTraceEvent[]
-    >([])
-
-    function merge(
-        incoming: OperationTraceEvent[]
-    ) {
+    function merge(incoming: OperationTraceEvent[]) {
         if (incoming.length === 0) {
             return
         }
 
-        const maxSequence = Math.max(
-            ...incoming.map(item => item.sequence)
-        )
-
-        lastSequence.current = Math.max(
-            lastSequence.current,
-            maxSequence
-        )
+        const maxSequence = Math.max(...incoming.map(item => item.sequence))
+        lastSequence.current = Math.max(lastSequence.current, maxSequence)
 
         setTraces(current => {
-            const bySequence = new Map<
-                number,
-                OperationTraceEvent
-            >()
-
-            current.forEach(item =>
-                bySequence.set(item.sequence, item)
-            )
-
-            incoming.forEach(item =>
-                bySequence.set(item.sequence, item)
-            )
-
-            return [...bySequence.values()].sort(
-                (a, b) => a.sequence - b.sequence
-            )
+            const bySequence = new Map<number, OperationTraceEvent>()
+            current.forEach(item => bySequence.set(item.sequence, item))
+            incoming.forEach(item => bySequence.set(item.sequence, item))
+            return [...bySequence.values()].sort((a, b) => a.sequence - b.sequence)
         })
     }
 
     useEffect(() => {
         let disposed = false
-
-        const source = new EventSource(
-            '/api/v1/live/stream'
-        )
+        const source = new EventSource('/api/v1/live/stream')
 
         const handleConnected = async () => {
             if (disposed) {
@@ -121,23 +215,10 @@ function App() {
 
             try {
                 /*
-                 * Important:
-                 *
-                 * SSE is already connected before history is read.
-                 * Any trace arriving while history loads is buffered.
-                 *
-                 * Therefore there is no:
-                 *
-                 * history query
-                 *      ↓
-                 * event commits here and disappears
-                 *      ↓
-                 * SSE connects
+                 * SSE is connected before history is read. Traces that arrive while history loads
+                 * are buffered and then de-duplicated by durable sequence number.
                  */
-
-                const history = await loadTraceHistory(
-                    lastSequence.current
-                )
+                const history = await loadTraceHistory(lastSequence.current)
 
                 if (disposed) {
                     return
@@ -145,20 +226,12 @@ function App() {
 
                 const buffered = pendingLive.current
                 pendingLive.current = []
-
-                merge([
-                    ...history,
-                    ...buffered
-                ])
+                merge([...history, ...buffered])
 
                 buffering.current = false
                 setConnection('LIVE')
             } catch (error) {
-                console.error(
-                    'Trace catch-up failed',
-                    error
-                )
-
+                console.error('Trace catch-up failed', error)
                 buffering.current = false
                 setConnection('DEGRADED')
             }
@@ -168,10 +241,7 @@ function App() {
             const message = event as MessageEvent
 
             try {
-                const trace =
-                    JSON.parse(
-                        message.data
-                    ) as OperationTraceEvent
+                const trace = JSON.parse(message.data) as OperationTraceEvent
 
                 if (buffering.current) {
                     pendingLive.current.push(trace)
@@ -180,22 +250,12 @@ function App() {
 
                 merge([trace])
             } catch (error) {
-                console.error(
-                    'Invalid trace SSE payload',
-                    error
-                )
+                console.error('Invalid trace SSE payload', error)
             }
         }
 
-        source.addEventListener(
-            'connected',
-            handleConnected
-        )
-
-        source.addEventListener(
-            'trace',
-            handleTrace
-        )
+        source.addEventListener('connected', handleConnected)
+        source.addEventListener('trace', handleTrace)
 
         source.onerror = () => {
             if (!disposed) {
@@ -209,51 +269,31 @@ function App() {
         }
     }, [])
 
-    const latest =
-        traces.length > 0
-            ? traces[traces.length - 1]
-            : null
+    const latest = traces.length > 0 ? traces[traces.length - 1] : null
 
     useEffect(() => {
-        if (
-            followLive &&
-            latest &&
-            selectedSequence !== latest.sequence
-        ) {
+        if (followLive && latest && selectedSequence !== latest.sequence) {
             setSelectedSequence(latest.sequence)
         }
-    }, [
-        followLive,
-        latest,
-        selectedSequence
-    ])
+    }, [followLive, latest, selectedSequence])
 
-    const selected =
-        traces.find(
-            trace =>
-                trace.sequence === selectedSequence
-        ) ??
-        latest
+    const selected = traces.find(trace => trace.sequence === selectedSequence) ?? latest
 
     const latestByStage = useMemo(() => {
-        const map =
-            new Map<
-                TraceStage,
-                OperationTraceEvent
-            >()
-
-        traces.forEach(trace => {
-            map.set(trace.stage, trace)
-        })
-
+        const map = new Map<TraceStage, OperationTraceEvent>()
+        traces.forEach(trace => map.set(trace.stage, trace))
         return map
     }, [traces])
 
+    const latestWindow = useMemo(
+        () => [...traces].reverse().find(
+            trace => trace.stage === 'SENSE' && trace.eventType === 'WINDOW_UPDATED'
+        ),
+        [traces]
+    )
+
     const visibleTape = useMemo(
-        () =>
-            [...traces]
-                .reverse()
-                .slice(0, 50),
+        () => [...traces].reverse().slice(0, 50),
         [traces]
     )
 
@@ -262,80 +302,60 @@ function App() {
             <header className="topbar">
                 <div>
                     <div className="brand-row">
-            <span className="brand">
-              MOVEIQ
-            </span>
-
-                        <span
-                            className={`connection connection-${connection.toLowerCase()}`}
-                        >
-              <span className="pulse-dot" />
+                        <span className="brand">MOVEIQ</span>
+                        <span className={`connection connection-${connection.toLowerCase()}`}>
+                            <span className="pulse-dot" />
                             {connection}
-            </span>
+                        </span>
                     </div>
 
-                    <h1>
-                        Mobility Operations Control Room
-                    </h1>
-
+                    <h1>Mobility Operations Control Room</h1>
                     <p className="subtitle">
-                        Backend-generated decision trace.
-                        No simulated browser state.
+                        Backend-generated decision state. No simulated browser metrics.
                     </p>
                 </div>
 
                 <div className="sequence-box">
                     <span>TRACE SEQUENCE</span>
-                    <strong>
-                        {lastSequence.current || '—'}
-                    </strong>
+                    <strong>{lastSequence.current || '—'}</strong>
                 </div>
             </header>
 
             <section className="stage-grid">
                 {STAGES.map(stage => {
-                    const event =
-                        latestByStage.get(stage)
+                    const event = latestByStage.get(stage)
+
+                    if (stage === 'SENSE') {
+                        return (
+                            <SenseCard
+                                key={stage}
+                                windowEvent={latestWindow}
+                                fallbackEvent={event}
+                            />
+                        )
+                    }
 
                     return (
                         <article
                             key={stage}
-                            className={`stage-card stage-${stage.toLowerCase()} ${
-                                event
-                                    ? 'stage-active'
-                                    : 'stage-waiting'
-                            }`}
+                            className={`stage-card stage-${stage.toLowerCase()} ${event ? 'stage-active' : 'stage-waiting'}`}
                         >
                             <div className="stage-heading">
                                 <span>{stage}</span>
-
                                 <span className="stage-status">
-                  {event
-                      ? 'BACKEND EVENT'
-                      : 'WAITING'}
-                </span>
+                                    {event ? 'BACKEND EVENT' : 'WAITING'}
+                                </span>
                             </div>
 
                             {event ? (
                                 <>
-                                    <strong className="event-type">
-                                        {event.eventType}
-                                    </strong>
-
+                                    <strong className="event-type">{event.eventType}</strong>
                                     <p>{event.summary}</p>
-
-                                    <small>
-                                        #{event.sequence}
-                                        {' · '}
-                                        {formatTime(
-                                            event.recordedAt
-                                        )}
-                                    </small>
+                                    <small>#{event.sequence} · {formatTime(event.recordedAt)}</small>
                                 </>
                             ) : (
                                 <p className="waiting-copy">
-                                    Waiting for a durable{' '}
-                                    {stage} event.
+                                    Waiting for a durable {stage} event.
                                 </p>
                             )}
                         </article>
@@ -347,167 +367,94 @@ function App() {
                 <div className="event-tape">
                     <div className="panel-heading">
                         <div>
-              <span className="panel-kicker">
-                LIVE EVENT TAPE
-              </span>
-
-                            <h2>
-                                Durable decision stream
-                            </h2>
+                            <span className="panel-kicker">LIVE EVENT TAPE</span>
+                            <h2>Durable decision stream</h2>
                         </div>
 
                         <button
-                            className={
-                                followLive
-                                    ? 'follow active'
-                                    : 'follow'
-                            }
-                            onClick={() =>
-                                setFollowLive(value => !value)
-                            }
+                            className={followLive ? 'follow active' : 'follow'}
+                            onClick={() => setFollowLive(value => !value)}
                         >
-                            {followLive
-                                ? '● Following live'
-                                : 'Follow live'}
+                            {followLive ? '● Following live' : 'Follow live'}
                         </button>
                     </div>
 
                     <div className="tape-list">
                         {visibleTape.length === 0 && (
-                            <div className="empty">
-                                Waiting for operation
-                                traces...
-                            </div>
+                            <div className="empty">Waiting for operation traces...</div>
                         )}
 
                         {visibleTape.map(trace => (
                             <button
                                 key={trace.sequence}
-                                className={`trace-row trace-${trace.stage.toLowerCase()} ${
-                                    selected?.sequence ===
-                                    trace.sequence
-                                        ? 'selected'
-                                        : ''
-                                }`}
+                                className={`trace-row trace-${trace.stage.toLowerCase()} ${selected?.sequence === trace.sequence ? 'selected' : ''}`}
                                 onClick={() => {
                                     setFollowLive(false)
-                                    setSelectedSequence(
-                                        trace.sequence
-                                    )
+                                    setSelectedSequence(trace.sequence)
                                 }}
                             >
-                <span className="trace-sequence">
-                  #{trace.sequence}
-                </span>
-
-                                <span
-                                    className={`stage-pill pill-${trace.stage.toLowerCase()}`}
-                                >
-                  {trace.stage}
-                </span>
-
-                                <span className="trace-time">
-                  {formatTime(
-                      trace.recordedAt
-                  )}
-                </span>
-
+                                <span className="trace-sequence">#{trace.sequence}</span>
+                                <span className={`stage-pill pill-${trace.stage.toLowerCase()}`}>
+                                    {trace.stage}
+                                </span>
+                                <span className="trace-time">{formatTime(trace.recordedAt)}</span>
                                 <span className="trace-content">
-                  <strong>
-                    {trace.eventType}
-                  </strong>
-
-                  <span>
-                    {trace.summary}
-                  </span>
-                </span>
+                                    <strong>{trace.eventType}</strong>
+                                    <span>{trace.summary}</span>
+                                </span>
                             </button>
                         ))}
                     </div>
                 </div>
 
                 <aside className="evidence-panel">
-          <span className="panel-kicker">
-            SELECTED EVIDENCE
-          </span>
+                    <span className="panel-kicker">SELECTED EVIDENCE</span>
 
                     {selected ? (
                         <>
-                            <h2>
-                                {selected.eventType}
-                            </h2>
+                            <h2>{selected.eventType}</h2>
 
                             <div className="detail-grid">
                                 <div>
                                     <span>Stage</span>
-                                    <strong>
-                                        {selected.stage}
-                                    </strong>
+                                    <strong>{selected.stage}</strong>
                                 </div>
-
                                 <div>
                                     <span>Sequence</span>
-                                    <strong>
-                                        #{selected.sequence}
-                                    </strong>
+                                    <strong>#{selected.sequence}</strong>
                                 </div>
-
                                 <div>
                                     <span>Event time</span>
-                                    <strong>
-                                        {formatTime(
-                                            selected.eventTime
-                                        )}
-                                    </strong>
+                                    <strong>{formatTime(selected.eventTime)}</strong>
                                 </div>
-
                                 <div>
                                     <span>Recorded</span>
-                                    <strong>
-                                        {formatTime(
-                                            selected.recordedAt
-                                        )}
-                                    </strong>
+                                    <strong>{formatTime(selected.recordedAt)}</strong>
                                 </div>
                             </div>
 
                             <div className="evidence-block">
                                 <span>Situation</span>
-                                <code>
-                                    {selected.situationId ??
-                                        'Not created yet'}
-                                </code>
+                                <code>{selected.situationId ?? 'Not created yet'}</code>
                             </div>
 
                             <div className="evidence-block">
                                 <span>Scope</span>
-                                <code>
-                                    {selected.scopeKey ??
-                                        '—'}
-                                </code>
+                                <code>{selected.scopeKey ?? '—'}</code>
                             </div>
 
                             <div className="evidence-block">
                                 <span>Source event</span>
-                                <code>
-                                    {selected.sourceEventId ??
-                                        '—'}
-                                </code>
+                                <code>{selected.sourceEventId ?? '—'}</code>
                             </div>
 
                             <div className="evidence-block">
                                 <span>Evidence</span>
-                                <p>
-                                    {formatEvidence(
-                                        selected.evidence
-                                    ) || 'No evidence payload'}
-                                </p>
+                                <p>{formatEvidence(selected.evidence) || 'No evidence payload'}</p>
                             </div>
                         </>
                     ) : (
-                        <p>
-                            No trace selected.
-                        </p>
+                        <p>No trace selected.</p>
                     )}
                 </aside>
             </section>
@@ -515,6 +462,4 @@ function App() {
     )
 }
 
-ReactDOM.createRoot(
-    document.getElementById('root')!
-).render(<App />)
+ReactDOM.createRoot(document.getElementById('root')!).render(<App />)
