@@ -1,0 +1,14 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: moveiq
+      POSTGRES_PASSWORD: moveiq
+      POSTGRES_DB: moveiq
+    ports:
+      - "5432:5432"
+    volumes:
+      - moveiq_pg:/var/lib/postgresql/data
+      - ./db/01_operational.sql:/docker-entrypoint-initdb.d/01_operational.sql:ro
+volumes:
+  moveiq_pg:

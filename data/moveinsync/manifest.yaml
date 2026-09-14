@@ -1,0 +1,11 @@
+version: "moveinsync-anonymized-trip-log-may-july-2026"
+provider: "MoveInSync"
+dataset_name: "MoveInSync Anonymized Trip Log Dataset"
+sources:
+  - {id: employees, dataset: employees, grain: one_employee_trip_leg, required: true, candidates: [emp_Data.csv, emp_data.csv]}
+  - {id: billing, dataset: billing, grain: one_billed_trip_line, required: true, candidates: [bill_data.csv]}
+  - {id: trips_may, dataset: trips, grain: one_trip, required: true, candidates: [Ride_data_trip-may_2026.csv, Ride_data _trip-may_2026.csv]}
+  - {id: trips_june, dataset: trips, grain: one_trip, required: true, candidates: [Ride_data_trip-June_2026.csv, Ride_data _trip-June_2026.csv]}
+  - {id: trips_july, dataset: trips, grain: one_trip, required: true, candidates: [Ride_data_trip-July_2026.csv, Ride_data _trip-July_2026.csv]}
+  - {id: feedback, dataset: feedback, grain: one_employee_trip_feedback, required: true, candidates: [trip_feedback.csv]}
+  - {id: alerts, dataset: alerts, grain: one_alert_event, required: true, candidates: [alerts_data.csv]}
