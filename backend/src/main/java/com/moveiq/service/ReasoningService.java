@@ -103,9 +103,9 @@ public class ReasoningService {
                             ORDER BY %s DESC, trip_id DESC) AS rn
                     FROM moveiq.trip
                     WHERE business_unit = ?
-                      AND (? IS NULL OR office = ?)
-                      AND (? IS NULL OR shift_type = ?)
-                      AND (? IS NULL OR trip_direction = ?)
+                      AND (CAST(? AS varchar) IS NULL OR office = ?)
+                      AND (CAST(? AS varchar) IS NULL OR shift_type = ?)
+                      AND (CAST(? AS varchar) IS NULL OR trip_direction = ?)
                       AND %s IS NOT NULL
                       AND %s <= ?
                 )
