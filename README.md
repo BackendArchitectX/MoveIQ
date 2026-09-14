@@ -1,98 +1,93 @@
 # MoveIQ
 
-**Evidence-governed mobility operations intelligence for MoveInSync data.**
+**Evidence-governed enterprise mobility intelligence built with Java and Spring Boot.**
 
-MoveIQ is designed around one auditable loop:
+MoveIQ turns the MoveInSync dataset and live mobility events into contextual operational signals, durable situations, evidence-backed decisions, governed actions, and measurable outcomes.
 
-```text
-official dataset
-    ↓
-data trust
-    ↓
-contextual metrics
-    ↓
-autonomous detection
-    ↓
-situation
-    ↓
-evidence-backed reasoning
-    ↓
-decision
-    ↓
-human approval
-    ↓
-revalidation
-    ↓
-action
-    ↓
-outcome verification
-    ↓
-leadership brief
-```
+## Core stack
 
-## Repository layout
+- **Java 17** with OOP, SOLID and concurrency-safe services
+- **Spring Boot 3**, Spring MVC, Spring Data JPA, Hibernate, Validation, Actuator
+- **PostgreSQL** for durable operational state and historical mobility data
+- **Redis** for idempotency, low-latency state and caching
+- **Kafka** for event-driven ingestion and distributed processing
+- **Flyway** for versioned database migrations
+- **Maven**, JUnit 5, Mockito, Testcontainers
+- **Docker**, Kubernetes and AWS/EKS-ready deployment
+- **OpenAPI/Swagger**, structured logging and health/metrics endpoints
+- **React/Vite** frontend
+
+## Architecture
 
 ```text
-moveiq/
-├── backend/                 FastAPI application
-├── frontend/                React/Vite UI
-├── data/
-│   └── moveinsync/          official MoveInSync source-data contract
-├── db/                      operational persistence schema
-├── docs/                    architecture and demo notes
-├── scripts/                 developer utilities
-├── .github/workflows/       CI
-├── Makefile
-├── docker-compose.yml
-└── .env.example
+MoveInSync CSV / mobility events
+            |
+            v
+ Validation + normalization
+            |
+            v
+ PostgreSQL ---- Redis
+      |            |
+      +-----+------+ 
+            v
+  Kafka mobility-events
+            |
+            v
+ deterministic detectors
+ (sliding windows / thresholds)
+            |
+            v
+ situation correlation
+ + idempotent contributions
+            |
+            v
+ evidence + decision layer
+            |
+            v
+ human approval
+            |
+            v
+ revalidation + idempotent action
+            |
+            v
+ outcome verification
 ```
 
 ## Official MoveInSync dataset
 
-The source dataset is intentionally **not committed** because the files are large.
-
-Place the seven supplied files in:
+Place the seven supplied files under `data/moveinsync/raw/`:
 
 ```text
-data/moveinsync/raw/
-├── emp_Data.csv
-├── bill_data.csv
-├── Ride_data_trip-may_2026.csv
-├── Ride_data_trip-June_2026.csv
-├── Ride_data_trip-July_2026.csv
-├── trip_feedback.csv
-└── alerts_data.csv
+emp_Data.csv
+bill_data.csv
+Ride_data_trip-may_2026.csv
+Ride_data_trip-June_2026.csv
+Ride_data_trip-July_2026.csv
+trip_feedback.csv
+alerts_data.csv
 ```
 
-Alternative filenames documented in `data/moveinsync/manifest.yaml` are also accepted.
+The raw files are intentionally Git-ignored because they are large. The folder contract and manifest remain versioned.
 
-## Quick start
+## Run locally
 
 ```bash
-make setup
-make data-check
-make profile
-make ingest
+cp .env.example .env
+docker compose up -d postgres redis kafka
+make test
 make backend
 make frontend
 ```
 
-Or:
+Backend: `http://localhost:8080`  
+Swagger: `http://localhost:8080/swagger-ui.html`  
+Frontend: `http://localhost:5173`
 
-```bash
-make demo
-```
+## Engineering invariants
 
-Backend: `http://localhost:8000`  
-Frontend: `http://localhost:5173`  
-API docs: `http://localhost:8000/docs`
-
-## Engineering laws
-
-1. **No metric without context.**
-2. **No evidence from silently repaired data.**
-3. **No AI number without provenance.**
-4. **No action without fresh revalidation.**
-5. **No claimed impact without observation or an explicit estimate label.**
-6. **Replay cannot see the future.**
-7. **Reprocessing must be idempotent.**
+1. No metric without context.
+2. No event processed twice.
+3. No situation impact inflated by replay.
+4. No action without fresh revalidation.
+5. No unsupported numeric AI claim.
+6. No claimed outcome without observation or an explicit estimate label.
