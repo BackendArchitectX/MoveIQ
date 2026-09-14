@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import ReactDOM from 'react-dom/client'
 import { ReplayPanel } from './ReplayPanel'
+import { ReasonPanel } from './ReasonPanel'
 import { loadTraceHistory, OperationTraceEvent, TraceStage } from './live'
 import './styles.css'
 
@@ -164,6 +165,7 @@ function App() {
                 {STAGES.map(stage => {
                     const event = latestByStage.get(stage)
                     if (stage === 'SENSE') return <SenseCard key={stage} windowEvent={latestWindow} fallbackEvent={event} />
+                    if (stage === 'REASON') return <ReasonPanel key={stage} />
                     return (
                         <article key={stage} className={`stage-card stage-${stage.toLowerCase()} ${event ? 'stage-active' : 'stage-waiting'}`}>
                             <div className="stage-heading"><span>{stage}</span><span className="stage-status">{event ? 'BACKEND EVENT' : 'WAITING'}</span></div>
