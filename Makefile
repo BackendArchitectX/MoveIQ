@@ -1,32 +1,26 @@
-PYTHON ?= python3
+MVN ?= mvn
 
-.PHONY: setup data-check profile ingest test lint backend frontend demo
+.PHONY: setup infra test backend frontend demo clean
 
 setup:
-	cd backend && $(PYTHON) -m pip install -e ".[dev,data]"
 	cd frontend && npm install
 
-data-check:
-	cd backend && $(PYTHON) -m app.data.manifest --check
-
-profile:
-	cd backend && $(PYTHON) -m app.data.profile
-
-ingest:
-	cd backend && $(PYTHON) -m app.data.ingest
+infra:
+	docker compose up -d postgres redis kafka
 
 test:
-	cd backend && $(PYTHON) -m pytest -q
+	cd backend && $(MVN) -B verify
 	cd frontend && npm run build
 
-lint:
-	cd backend && $(PYTHON) -m ruff check app tests
-
 backend:
-	cd backend && $(PYTHON) -m uvicorn app.main:app --reload --port 8000
+	cd backend && $(MVN) spring-boot:run
 
 frontend:
 	cd frontend && npm run dev
 
-demo: data-check
+demo: infra
 	$(MAKE) -j2 backend frontend
+
+clean:
+	cd backend && $(MVN) clean
+	rm -rf frontend/dist

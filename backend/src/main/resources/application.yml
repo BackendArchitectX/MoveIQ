@@ -1,0 +1,76 @@
+server:
+  port: 8080
+  shutdown: graceful
+
+spring:
+  application:
+    name: moveiq
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/moveiq}
+    username: ${SPRING_DATASOURCE_USERNAME:moveiq}
+    password: ${SPRING_DATASOURCE_PASSWORD:moveiq}
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 4
+      connection-timeout: 3000
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        jdbc.batch_size: 100
+        order_inserts: true
+        order_updates: true
+  flyway:
+    enabled: true
+    schemas: moveiq
+    create-schemas: true
+  data:
+    redis:
+      host: ${SPRING_DATA_REDIS_HOST:localhost}
+      port: ${SPRING_DATA_REDIS_PORT:6379}
+  kafka:
+    bootstrap-servers: ${SPRING_KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    consumer:
+      group-id: moveiq-mobility-v1
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      acks: all
+      properties:
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 5
+    listener:
+      ack-mode: record
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: when_authorized
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+
+moveiq:
+  data-root: ${MOVEIQ_DATA_ROOT:../data/moveinsync/raw}
+  action-mode: ${MOVEIQ_ACTION_MODE:SIMULATED}
+  detection:
+    window-minutes: 15
+    event-threshold: 3
+  kafka:
+    mobility-topic: moveiq.mobility-events.v1
+    situation-topic: moveiq.situations.v1
+  outbox:
+    publish-delay-ms: 2000

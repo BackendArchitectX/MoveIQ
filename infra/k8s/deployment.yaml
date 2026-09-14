@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: moveiq-backend
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: moveiq-backend }
+  template:
+    metadata:
+      labels: { app: moveiq-backend }
+    spec:
+      containers:
+        - name: moveiq
+          image: moveiq/backend:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: SPRING_PROFILES_ACTIVE
+              value: production
+          readinessProbe:
+            httpGet: { path: /actuator/health/readiness, port: 8080 }
+            initialDelaySeconds: 15
+          livenessProbe:
+            httpGet: { path: /actuator/health/liveness, port: 8080 }
+            initialDelaySeconds: 30
+          resources:
+            requests: { cpu: 250m, memory: 512Mi }
+            limits: { cpu: "1", memory: 1Gi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: moveiq-backend
+spec:
+  selector: { app: moveiq-backend }
+  ports:
+    - port: 80
+      targetPort: 8080
