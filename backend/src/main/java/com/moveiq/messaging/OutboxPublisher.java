@@ -1,6 +1,8 @@
 package com.moveiq.messaging;
 
 import com.moveiq.repository.OutboxEventRepository;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -16,21 +18,32 @@ public class OutboxPublisher {
     private final OutboxEventRepository repository;
     private final KafkaTemplate<String, String> kafka;
     private final String topic;
+    private final Counter published;
+    private final Counter failed;
 
-    public OutboxPublisher(OutboxEventRepository repository, KafkaTemplate<String, String> kafka, @Value("${moveiq.kafka.situation-topic}") String topic) {
-        this.repository = repository; this.kafka = kafka; this.topic = topic;
+    public OutboxPublisher(
+            OutboxEventRepository repository,
+            KafkaTemplate<String, String> kafka,
+            MeterRegistry registry,
+            @Value("${moveiq.kafka.situation-topic}") String topic) {
+        this.repository = repository;
+        this.kafka = kafka;
+        this.topic = topic;
+        this.published = registry.counter("moveiq.outbox.published");
+        this.failed = registry.counter("moveiq.outbox.failed");
     }
 
     @Scheduled(fixedDelayString = "${moveiq.outbox.publish-delay-ms:2000}")
     @Transactional
     public void publishPending() {
-        repository.findTop100ByPublishedAtIsNullOrderByCreatedAtAsc().forEach(event -> {
+        repository.lockNextBatch().forEach(event -> {
             try {
                 kafka.send(topic, event.getId().toString(), event.getPayload()).get(5, TimeUnit.SECONDS);
                 event.markPublished();
-                repository.save(event);
+                published.increment();
             } catch (Exception ex) {
-                log.warn("Outbox publish failed for {}", event.getId(), ex);
+                failed.increment();
+                log.warn("outbox_publish_failed eventId={} eventType={}", event.getId(), event.getEventType(), ex);
             }
         });
     }

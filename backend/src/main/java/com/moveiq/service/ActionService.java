@@ -5,10 +5,12 @@ import com.moveiq.api.dto.ActionDtos.ExecutionReceipt;
 import com.moveiq.api.dto.ActionDtos.ProposeActionRequest;
 import com.moveiq.domain.ActionExecutionEntity;
 import com.moveiq.domain.ActionProposalEntity;
+import com.moveiq.integration.ActionExecutionRouter;
 import com.moveiq.repository.ActionExecutionRepository;
 import com.moveiq.repository.ActionProposalRepository;
 import com.moveiq.repository.SituationRepository;
-import java.time.Duration;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -20,39 +22,57 @@ public class ActionService {
     private final ActionProposalRepository proposals;
     private final ActionExecutionRepository executions;
     private final SituationRepository situations;
-    private final RedisIdempotencyService idempotency;
+    private final EvidenceHashService evidenceHash;
+    private final ActionExecutionRouter executionRouter;
+    private final Counter staleCounter;
 
-    public ActionService(ActionProposalRepository proposals, ActionExecutionRepository executions, SituationRepository situations, RedisIdempotencyService idempotency) {
-        this.proposals = proposals; this.executions = executions; this.situations = situations; this.idempotency = idempotency;
+    public ActionService(
+            ActionProposalRepository proposals,
+            ActionExecutionRepository executions,
+            SituationRepository situations,
+            EvidenceHashService evidenceHash,
+            ActionExecutionRouter executionRouter,
+            MeterRegistry meterRegistry) {
+        this.proposals = proposals;
+        this.executions = executions;
+        this.situations = situations;
+        this.evidenceHash = evidenceHash;
+        this.executionRouter = executionRouter;
+        this.staleCounter = meterRegistry.counter("moveiq.actions.stale");
     }
 
     @Transactional
     public ActionProposalEntity propose(UUID situationId, ProposeActionRequest request) {
-        if (!situations.existsById(situationId)) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Situation not found");
-        return proposals.save(new ActionProposalEntity(situationId, request.actionType(), request.evidenceHash()));
+        if (!situations.existsById(situationId)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Situation not found");
+        }
+        executionRouter.assertSupported(request.actionType());
+        String hash = evidenceHash.compute(situationId);
+        return proposals.save(new ActionProposalEntity(situationId, request.actionType(), hash));
     }
 
     @Transactional
     public ExecutionReceipt approveAndExecute(UUID proposalId, ApproveActionRequest request) {
-        ActionProposalEntity proposal = proposals.findById(proposalId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Action proposal not found"));
-
-        if (!proposal.getEvidenceHash().equals(request.currentEvidenceHash())) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Evidence changed; recommendation is stale and must be revalidated");
-        }
-
         var existing = executions.findByIdempotencyKey(request.idempotencyKey());
         if (existing.isPresent()) return receipt(proposalId, existing.get());
 
-        if (!idempotency.firstProcessing("action", request.idempotencyKey(), Duration.ofHours(24))) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Action is already being executed");
+        ActionProposalEntity proposal = proposals.findForUpdate(proposalId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Action proposal not found"));
+
+        if (!"PROPOSED".equals(proposal.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Action proposal is no longer pending");
         }
 
-        proposal.approve(request.approvedBy());
-        proposals.save(proposal);
+        String currentHash = evidenceHash.compute(proposal.getSituationId());
+        if (!proposal.getEvidenceHash().equals(currentHash)) {
+            staleCounter.increment();
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Evidence changed; regenerate the recommendation before approval");
+        }
 
-        String externalReference = "SIM-" + proposalId;
-        ActionExecutionEntity execution = executions.save(new ActionExecutionEntity(proposalId, request.idempotencyKey(), "EXECUTED", externalReference));
+        var result = executionRouter.execute(proposal, request.idempotencyKey());
+        proposal.approve(request.approvedBy());
+        ActionExecutionEntity execution = executions.save(new ActionExecutionEntity(
+                proposalId, request.idempotencyKey(), result.status(), result.externalReference()));
         return receipt(proposalId, execution);
     }
 

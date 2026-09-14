@@ -1,13 +1,15 @@
 package com.moveiq.service;
 
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.*;
 
 import com.moveiq.api.dto.ActionDtos.ApproveActionRequest;
 import com.moveiq.domain.ActionProposalEntity;
+import com.moveiq.integration.ActionExecutionRouter;
 import com.moveiq.repository.ActionExecutionRepository;
 import com.moveiq.repository.ActionProposalRepository;
 import com.moveiq.repository.SituationRepository;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -21,16 +23,23 @@ class ActionServiceTest {
     @Mock ActionProposalRepository proposals;
     @Mock ActionExecutionRepository executions;
     @Mock SituationRepository situations;
-    @Mock RedisIdempotencyService idempotency;
+    @Mock EvidenceHashService evidenceHash;
+    @Mock ActionExecutionRouter router;
 
     @Test
-    void rejectsApprovalWhenEvidenceChanged() {
+    void rejectsApprovalWhenFreshEvidenceChanged() {
         UUID proposalId = UUID.randomUUID();
-        var proposal = new ActionProposalEntity(UUID.randomUUID(), "ESCALATE_VENDOR", "old-hash");
-        when(proposals.findById(proposalId)).thenReturn(Optional.of(proposal));
-        var service = new ActionService(proposals, executions, situations, idempotency);
+        UUID situationId = UUID.randomUUID();
+        var proposal = new ActionProposalEntity(situationId, "ESCALATE_VENDOR", "old-hash");
+        when(executions.findByIdempotencyKey("idem-1")).thenReturn(Optional.empty());
+        when(proposals.findForUpdate(proposalId)).thenReturn(Optional.of(proposal));
+        when(evidenceHash.compute(situationId)).thenReturn("new-hash");
+
+        var service = new ActionService(
+                proposals, executions, situations, evidenceHash, router, new SimpleMeterRegistry());
 
         assertThrows(ResponseStatusException.class, () -> service.approveAndExecute(
-                proposalId, new ApproveActionRequest("manager", "new-hash", "idem-1")));
+                proposalId, new ApproveActionRequest("manager", "idem-1")));
+        verifyNoInteractions(router);
     }
 }

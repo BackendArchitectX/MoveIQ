@@ -1,18 +1,24 @@
 server:
   port: 8080
   shutdown: graceful
+  compression:
+    enabled: true
 
 spring:
   application:
     name: moveiq
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
   datasource:
     url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/moveiq}
     username: ${SPRING_DATASOURCE_USERNAME:moveiq}
     password: ${SPRING_DATASOURCE_PASSWORD:moveiq}
     hikari:
-      maximum-pool-size: 20
-      minimum-idle: 4
+      maximum-pool-size: ${DB_POOL_MAX:20}
+      minimum-idle: ${DB_POOL_MIN:4}
       connection-timeout: 3000
+      validation-timeout: 2000
+      max-lifetime: 1800000
   jpa:
     open-in-view: false
     hibernate:
@@ -22,6 +28,7 @@ spring:
         jdbc.batch_size: 100
         order_inserts: true
         order_updates: true
+        generate_statistics: false
   flyway:
     enabled: true
     schemas: moveiq
@@ -30,14 +37,17 @@ spring:
     redis:
       host: ${SPRING_DATA_REDIS_HOST:localhost}
       port: ${SPRING_DATA_REDIS_PORT:6379}
+      timeout: 2s
   kafka:
     bootstrap-servers: ${SPRING_KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     consumer:
-      group-id: moveiq-mobility-v1
+      group-id: moveiq-mobility-v2
       auto-offset-reset: earliest
       enable-auto-commit: false
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      properties:
+        isolation.level: read_committed
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
@@ -45,6 +55,7 @@ spring:
       properties:
         enable.idempotence: true
         max.in.flight.requests.per.connection: 5
+        delivery.timeout.ms: 120000
     listener:
       ack-mode: record
 
@@ -58,6 +69,9 @@ management:
       probes:
         enabled: true
       show-details: when_authorized
+  metrics:
+    tags:
+      application: moveiq
 
 springdoc:
   swagger-ui:
@@ -65,12 +79,16 @@ springdoc:
 
 moveiq:
   data-root: ${MOVEIQ_DATA_ROOT:../data/moveinsync/raw}
+  ingestion:
+    batch-size: ${MOVEIQ_INGEST_BATCH_SIZE:1000}
   action-mode: ${MOVEIQ_ACTION_MODE:SIMULATED}
   detection:
     window-minutes: 15
     event-threshold: 3
+    redis-ttl-minutes: 60
   kafka:
-    mobility-topic: moveiq.mobility-events.v1
-    situation-topic: moveiq.situations.v1
+    mobility-topic: moveiq.mobility-events.v2
+    situation-topic: moveiq.situations.v2
+    dlt-suffix: .DLT
   outbox:
     publish-delay-ms: 2000

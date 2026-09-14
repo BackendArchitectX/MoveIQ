@@ -4,38 +4,51 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.moveiq.api.dto.DetectedSignal;
 import com.moveiq.domain.OutboxEventEntity;
-import com.moveiq.domain.SituationContributionEntity;
 import com.moveiq.domain.SituationEntity;
 import com.moveiq.repository.OutboxEventRepository;
-import com.moveiq.repository.SituationContributionRepository;
 import com.moveiq.repository.SituationRepository;
+import com.moveiq.store.SituationContributionStore;
+import com.moveiq.store.SituationStore;
 import java.util.Map;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class SituationService {
+    private final SituationStore situationStore;
+    private final SituationContributionStore contributionStore;
     private final SituationRepository situations;
-    private final SituationContributionRepository contributions;
     private final OutboxEventRepository outbox;
     private final ObjectMapper objectMapper;
 
-    public SituationService(SituationRepository situations, SituationContributionRepository contributions, OutboxEventRepository outbox, ObjectMapper objectMapper) {
-        this.situations = situations; this.contributions = contributions; this.outbox = outbox; this.objectMapper = objectMapper;
+    public SituationService(
+            SituationStore situationStore,
+            SituationContributionStore contributionStore,
+            SituationRepository situations,
+            OutboxEventRepository outbox,
+            ObjectMapper objectMapper) {
+        this.situationStore = situationStore;
+        this.contributionStore = contributionStore;
+        this.situations = situations;
+        this.outbox = outbox;
+        this.objectMapper = objectMapper;
     }
 
     @Transactional
     public SituationEntity applySignal(DetectedSignal signal) {
-        String correlationKey = String.join("|", safe(signal.businessUnit()), safe(signal.office()), safe(signal.shift()), safe(signal.direction()), signal.signalType());
-        SituationEntity situation = situations.findByCorrelationKey(correlationKey)
-                .orElseGet(() -> situations.save(new SituationEntity(correlationKey, signal.businessUnit(), signal.signalType(), signal.office(), signal.shift(), signal.direction())));
+        String correlationKey = String.join("|",
+                safe(signal.businessUnit()), safe(signal.office()), safe(signal.shift()),
+                safe(signal.direction()), signal.signalType());
 
-        if (contributions.existsBySituationIdAndSourceEventId(situation.getId(), signal.sourceEventId())) return situation;
+        SituationEntity situation = situationStore.getOrCreate(correlationKey, signal);
+        if (!contributionStore.insertIfAbsent(situation.getId(), signal)) {
+            return situation;
+        }
 
-        contributions.save(new SituationContributionEntity(situation.getId(), signal.sourceEventId(), signal.affectedEmployees(), signal.delayMinutes()));
         situation.addImpact(signal.affectedEmployees(), signal.delayMinutes());
         situations.save(situation);
-        outbox.save(new OutboxEventEntity("Situation", situation.getId().toString(), "SITUATION_UPDATED", payload(situation, signal)));
+        outbox.save(new OutboxEventEntity(
+                "Situation", situation.getId().toString(), "SITUATION_UPDATED", payload(situation, signal)));
         return situation;
     }
 
@@ -53,5 +66,7 @@ public class SituationService {
         }
     }
 
-    private static String safe(String value) { return value == null ? "" : value; }
+    private static String safe(String value) {
+        return value == null ? "" : value;
+    }
 }

@@ -14,6 +14,13 @@ public class KafkaTopicsConfig {
     }
 
     @Bean
+    NewTopic mobilityDltTopic(
+            @Value("${moveiq.kafka.mobility-topic}") String name,
+            @Value("${moveiq.kafka.dlt-suffix:.DLT}") String suffix) {
+        return TopicBuilder.name(name + suffix).partitions(6).replicas(1).build();
+    }
+
+    @Bean
     NewTopic situationTopic(@Value("${moveiq.kafka.situation-topic}") String name) {
         return TopicBuilder.name(name).partitions(3).replicas(1).build();
     }

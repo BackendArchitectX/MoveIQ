@@ -2,6 +2,7 @@ package com.moveiq.service;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -25,13 +26,24 @@ public class DatasetService {
     }
 
     public DatasetStatus status() {
+        Map<String, Path> files = resolvedFiles();
         Map<String, String> resolved = new LinkedHashMap<>();
+        files.forEach((id, path) -> resolved.put(id, path.getFileName().toString()));
         Map<String, List<String>> missing = new LinkedHashMap<>();
         sources.forEach((id, candidates) -> {
-            candidates.stream().map(root::resolve).filter(Files::isRegularFile).findFirst()
-                    .ifPresentOrElse(path -> resolved.put(id, path.getFileName().toString()), () -> missing.put(id, candidates));
+            if (!files.containsKey(id)) missing.put(id, candidates);
         });
         return new DatasetStatus(root.toString(), resolved, missing, missing.isEmpty());
+    }
+
+    public Map<String, Path> resolvedFiles() {
+        Map<String, Path> resolved = new LinkedHashMap<>();
+        sources.forEach((id, candidates) -> candidates.stream()
+                .map(root::resolve)
+                .filter(Files::isRegularFile)
+                .findFirst()
+                .ifPresent(path -> resolved.put(id, path)));
+        return Collections.unmodifiableMap(resolved);
     }
 
     public record DatasetStatus(String root, Map<String, String> resolved, Map<String, List<String>> missing, boolean ready) {}
