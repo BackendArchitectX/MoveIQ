@@ -18,3 +18,8 @@ data/profiles/**
 *.xlsx
 *.xls
 *.xlsb
+
+# TypeScript/Vite build artifacts
+*.tsbuildinfo
+frontend/vite.config.js
+frontend/vite.config.d.ts

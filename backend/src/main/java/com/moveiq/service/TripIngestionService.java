@@ -178,11 +178,16 @@ public class TripIngestionService {
     private LocalDate parseDate(String raw) {
         for (DateTimeFormatter formatter : List.of(
                 DateTimeFormatter.ISO_LOCAL_DATE,
+                DateTimeFormatter.ofPattern("MMMM d, uuuu", Locale.ENGLISH),
+                DateTimeFormatter.ofPattern("MMM d, uuuu", Locale.ENGLISH),
                 DateTimeFormatter.ofPattern("dd-MM-uuuu"),
                 DateTimeFormatter.ofPattern("MM/dd/uuuu"),
                 DateTimeFormatter.ofPattern("dd/MM/uuuu"),
                 DateTimeFormatter.ofPattern("MM-dd-uuuu"))) {
-            try { return LocalDate.parse(raw.trim(), formatter); } catch (DateTimeParseException ignored) { }
+            try {
+                return LocalDate.parse(raw.trim(), formatter);
+            } catch (DateTimeParseException ignored) {
+            }
         }
         throw new IllegalArgumentException("unsupported trip_date=" + raw);
     }
