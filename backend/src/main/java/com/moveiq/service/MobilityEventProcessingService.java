@@ -4,6 +4,7 @@ import com.moveiq.api.dto.MobilityEvent;
 import com.moveiq.store.ProcessedEventStore;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -15,6 +16,7 @@ public class MobilityEventProcessingService {
     private final ProcessedEventStore processedEvents;
     private final SlidingWindowSignalDetector detector;
     private final SituationService situations;
+    private final ReasoningService reasoning;
     private final OperationTraceService traces;
     private final String consumerGroup;
     private final Counter processedCounter;
@@ -25,6 +27,7 @@ public class MobilityEventProcessingService {
             ProcessedEventStore processedEvents,
             SlidingWindowSignalDetector detector,
             SituationService situations,
+            ReasoningService reasoning,
             OperationTraceService traces,
             MeterRegistry meterRegistry,
             @Value("${spring.kafka.consumer.group-id}") String consumerGroup) {
@@ -32,6 +35,7 @@ public class MobilityEventProcessingService {
         this.processedEvents = processedEvents;
         this.detector = detector;
         this.situations = situations;
+        this.reasoning = reasoning;
         this.traces = traces;
         this.consumerGroup = consumerGroup;
 
@@ -42,11 +46,7 @@ public class MobilityEventProcessingService {
 
     @Transactional
     public void process(MobilityEvent event) {
-
-        if (!processedEvents.claim(
-                consumerGroup,
-                event.businessUnit(),
-                event.eventId())) {
+        if (!processedEvents.claim(consumerGroup, event.businessUnit(), event.eventId())) {
             duplicateCounter.increment();
             return;
         }
@@ -54,13 +54,7 @@ public class MobilityEventProcessingService {
         processedCounter.increment();
 
         traces.record(
-                null,
-                null,
-                event.eventId(),
-                scopeKey(event),
-                "SENSE",
-                "EVENT_ACCEPTED",
-                event.occurredAt(),
+                null, null, event.eventId(), scopeKey(event), "SENSE", "EVENT_ACCEPTED", event.occurredAt(),
                 "Mobility event accepted for distributed detection",
                 Map.of(
                         "eventType", event.eventType(),
@@ -70,13 +64,7 @@ public class MobilityEventProcessingService {
         DetectionEvaluation evaluation = detector.evaluate(event);
 
         traces.record(
-                null,
-                null,
-                event.eventId(),
-                scopeKey(event),
-                "SENSE",
-                "WINDOW_UPDATED",
-                event.occurredAt(),
+                null, null, event.eventId(), scopeKey(event), "SENSE", "WINDOW_UPDATED", event.occurredAt(),
                 evaluation.thresholdCrossed()
                         ? "Detection window reached its threshold"
                         : "Detection window updated",
@@ -89,21 +77,13 @@ public class MobilityEventProcessingService {
                         "includedInWindow", evaluation.includedInWindow(),
                         "watermarkEpochMillis", evaluation.watermarkEpochMillis()));
 
-        if (evaluation.signal().isEmpty()) {
-            return;
-        }
+        if (evaluation.signal().isEmpty()) return;
 
         var signal = evaluation.signal().orElseThrow();
         signalCounter.increment();
 
         traces.record(
-                null,
-                null,
-                event.eventId(),
-                scopeKey(event),
-                "SENSE",
-                "SIGNAL_DETECTED",
-                signal.detectedAt(),
+                null, null, event.eventId(), scopeKey(event), "SENSE", "SIGNAL_DETECTED", signal.detectedAt(),
                 "Distributed detection threshold crossed",
                 Map.of(
                         "signalType", signal.signalType(),
@@ -112,6 +92,21 @@ public class MobilityEventProcessingService {
                         "delayMinutes", signal.delayMinutes()));
 
         var situation = situations.applySignal(signal);
+        var reason = reasoning.computeAndStore(situation, signal);
+
+        Map<String, Object> reasonEvidence = new LinkedHashMap<>();
+        reasonEvidence.put("situationType", situation.getSituationType());
+        reasonEvidence.put("affectedEmployees", situation.getAffectedEmployees());
+        reasonEvidence.put("delayMinutes", situation.getDelayMinutes());
+        reasonEvidence.put("currentAvgDelay", reason.currentAvgDelay());
+        reasonEvidence.put("baselineAvgDelay", reason.baselineAvgDelay());
+        reasonEvidence.put("deltaPct", reason.deltaPct());
+        reasonEvidence.put("currentSampleSize", reason.currentSampleSize());
+        reasonEvidence.put("baselineSampleSize", reason.baselineSampleSize());
+        reasonEvidence.put("coveragePct", reason.coveragePct());
+        reasonEvidence.put("trustStatus", reason.trustStatus());
+        reasonEvidence.put("recommendation", reason.recommendation());
+        reasonEvidence.put("methodologyVersion", reason.methodologyVersion());
 
         traces.record(
                 null,
@@ -119,13 +114,10 @@ public class MobilityEventProcessingService {
                 event.eventId(),
                 scopeKey(event),
                 "REASON",
-                "SITUATION_CORRELATED",
+                "REASON_SNAPSHOT_COMPUTED",
                 signal.detectedAt(),
-                "Signal correlated into durable operational situation",
-                Map.of(
-                        "situationType", situation.getSituationType(),
-                        "affectedEmployees", situation.getAffectedEmployees(),
-                        "delayMinutes", situation.getDelayMinutes()));
+                "Deterministic context and baseline computed without future replay data",
+                reasonEvidence);
     }
 
     private String scopeKey(MobilityEvent event) {
