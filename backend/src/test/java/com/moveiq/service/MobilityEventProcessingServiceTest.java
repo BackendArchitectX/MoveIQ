@@ -15,6 +15,7 @@ class MobilityEventProcessingServiceTest {
         ProcessedEventStore store = mock(ProcessedEventStore.class);
         SlidingWindowSignalDetector detector = mock(SlidingWindowSignalDetector.class);
         SituationService situations = mock(SituationService.class);
+        ReasoningService reasoning = mock(ReasoningService.class);
         OperationTraceService traces = mock(OperationTraceService.class);
 
         MobilityEvent event = new MobilityEvent(
@@ -30,19 +31,19 @@ class MobilityEventProcessingServiceTest {
                 10,
                 Instant.parse("2026-07-15T02:00:00Z"));
 
-        when(store.claim("group", "vanta-Aus", "evt-1"))
-                .thenReturn(false);
+        when(store.claim("group", "vanta-Aus", "evt-1")).thenReturn(false);
 
         var service = new MobilityEventProcessingService(
                 store,
                 detector,
                 situations,
+                reasoning,
                 traces,
                 new SimpleMeterRegistry(),
                 "group");
 
         service.process(event);
 
-        verifyNoInteractions(detector, situations, traces);
+        verifyNoInteractions(detector, situations, reasoning, traces);
     }
 }
