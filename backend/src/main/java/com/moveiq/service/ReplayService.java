@@ -37,6 +37,7 @@ public class ReplayService {
     private Instant replayTime;
     private Instant previousPublishedEventTime;
     private ReplayTripSource.ReplayCursor cursor;
+    private ReplayTripSource.ReplayTrip pendingTrip;
     private String lastError;
     private ScheduledFuture<?> scheduled;
     private long generation;
@@ -69,18 +70,20 @@ public class ReplayService {
             replayTime = null;
             previousPublishedEventTime = null;
             cursor = null;
+            pendingTrip = null;
             lastError = null;
             buffer.clear();
             accumulatedActiveNanos = 0;
             activeStartedNanos = System.nanoTime();
 
             if (total == 0) {
+                activeStartedNanos = 0;
                 status = ReplayStatus.COMPLETED;
                 return snapshotLocked();
             }
 
             status = ReplayStatus.RUNNING;
-            scheduleLocked(0, generation);
+            advanceLocked(generation);
             return snapshotLocked();
         }
     }
@@ -100,7 +103,7 @@ public class ReplayService {
             requireStatus(ReplayStatus.PAUSED, "Replay is not paused");
             status = ReplayStatus.RUNNING;
             activeStartedNanos = System.nanoTime();
-            scheduleLocked(0, generation);
+            advanceLocked(generation);
             return snapshotLocked();
         }
     }
@@ -114,6 +117,7 @@ public class ReplayService {
             cancelScheduledLocked();
             status = ReplayStatus.STOPPED;
             buffer.clear();
+            pendingTrip = null;
             return snapshotLocked();
         }
     }
@@ -131,30 +135,49 @@ public class ReplayService {
         }
     }
 
-    private void step(long expectedGeneration) {
+    private void advanceLocked(long expectedGeneration) {
+        if (status != ReplayStatus.RUNNING || generation != expectedGeneration) {
+            return;
+        }
+        if (scheduled != null && !scheduled.isDone()) {
+            return;
+        }
+
+        if (pendingTrip == null) {
+            try {
+                pendingTrip = nextTripLocked();
+            } catch (RuntimeException e) {
+                failLocked(e);
+                return;
+            }
+        }
+
+        if (pendingTrip == null) {
+            completeLocked();
+            return;
+        }
+
+        long delayMillis = replayDelayMillis(
+                previousPublishedEventTime,
+                pendingTrip.event().occurredAt(),
+                speed);
+
+        scheduled = executor.schedule(
+                () -> dispatchPending(expectedGeneration),
+                delayMillis,
+                TimeUnit.MILLISECONDS);
+    }
+
+    private void dispatchPending(long expectedGeneration) {
         ReplayTripSource.ReplayTrip trip;
         synchronized (lock) {
             scheduled = null;
             if (status != ReplayStatus.RUNNING || generation != expectedGeneration) {
                 return;
             }
-
-            try {
-                trip = nextTripLocked();
-            } catch (RuntimeException e) {
-                failLocked(e);
-                return;
-            }
-
+            trip = pendingTrip;
             if (trip == null) {
-                completeLocked();
-                return;
-            }
-
-            long delayMillis = replayDelayMillis(previousPublishedEventTime, trip.event().occurredAt(), speed);
-            if (delayMillis > 0) {
-                buffer.addFirst(trip);
-                scheduleLocked(delayMillis, expectedGeneration);
+                advanceLocked(expectedGeneration);
                 return;
             }
         }
@@ -174,9 +197,10 @@ public class ReplayService {
                     replayTime = trip.event().occurredAt();
                     previousPublishedEventTime = trip.event().occurredAt();
                     cursor = trip.cursor();
+                    pendingTrip = null;
 
                     if (status == ReplayStatus.RUNNING) {
-                        scheduleLocked(0, expectedGeneration);
+                        advanceLocked(expectedGeneration);
                     }
                 }
             });
@@ -207,22 +231,13 @@ public class ReplayService {
         return Math.max(0, eventMillis / currentSpeed);
     }
 
-    private void scheduleLocked(long delayMillis, long expectedGeneration) {
-        if (scheduled != null && !scheduled.isDone()) {
-            return;
-        }
-        scheduled = executor.schedule(
-                () -> step(expectedGeneration),
-                Math.max(0, delayMillis),
-                TimeUnit.MILLISECONDS);
-    }
-
     private void completeLocked() {
         if (status == ReplayStatus.RUNNING) {
             accumulateActiveTimeLocked();
         }
         status = ReplayStatus.COMPLETED;
         scheduled = null;
+        pendingTrip = null;
     }
 
     private void failLocked(Throwable error) {
@@ -297,6 +312,7 @@ public class ReplayService {
             generation++;
             cancelScheduledLocked();
             status = ReplayStatus.STOPPED;
+            pendingTrip = null;
         }
         executor.shutdownNow();
     }
