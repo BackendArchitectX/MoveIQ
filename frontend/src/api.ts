@@ -22,13 +22,40 @@ export type ReplayState = {
     lastError: string | null
 }
 
+export type ReasoningSnapshot = {
+    situationId: string
+    businessUnit: string
+    office: string | null
+    shift: string | null
+    direction: string | null
+    eventTime: string
+    currentAvgDelay: number
+    baselineAvgDelay: number | null
+    deltaPct: number | null
+    currentSampleSize: number
+    baselineSampleSize: number
+    coveragePct: number
+    trustStatus: 'HIGH' | 'MEDIUM' | 'LOW'
+    recommendation: string
+    methodologyVersion: string
+    computedAt: string
+}
+
+export type ControlRoomState = {
+    source: ReplayState
+    reason: ReasoningSnapshot | null
+    generatedAt: string
+}
+
 export async function getSituations(): Promise<Situation[]> {
     const response = await fetch('/api/v1/situations')
+    if (!response.ok) throw new Error(`Failed to load situations: ${response.status}`)
+    return response.json()
+}
 
-    if (!response.ok) {
-        throw new Error(`Failed to load situations: ${response.status}`)
-    }
-
+export async function getControlRoomState(): Promise<ControlRoomState> {
+    const response = await fetch('/api/v1/control-room/state')
+    if (!response.ok) throw new Error(`Failed to load control-room state: ${response.status}`)
     return response.json()
 }
 
@@ -51,26 +78,9 @@ async function replayRequest(
     return response.json()
 }
 
-export function getReplayState() {
-    return replayRequest('/status')
-}
-
-export function startReplay(speed: number) {
-    return replayRequest('/start', 'POST', { speed })
-}
-
-export function pauseReplay() {
-    return replayRequest('/pause', 'POST')
-}
-
-export function resumeReplay() {
-    return replayRequest('/resume', 'POST')
-}
-
-export function stopReplay() {
-    return replayRequest('/stop', 'POST')
-}
-
-export function setReplaySpeed(speed: number) {
-    return replayRequest('/speed', 'PUT', { speed })
-}
+export function getReplayState() { return replayRequest('/status') }
+export function startReplay(speed: number) { return replayRequest('/start', 'POST', { speed }) }
+export function pauseReplay() { return replayRequest('/pause', 'POST') }
+export function resumeReplay() { return replayRequest('/resume', 'POST') }
+export function stopReplay() { return replayRequest('/stop', 'POST') }
+export function setReplaySpeed(speed: number) { return replayRequest('/speed', 'PUT', { speed }) }
