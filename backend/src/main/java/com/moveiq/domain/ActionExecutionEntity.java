@@ -19,6 +19,8 @@ public class ActionExecutionEntity {
         this.proposalId = proposalId; this.idempotencyKey = idempotencyKey; this.status = status; this.externalReference = externalReference;
     }
     public UUID getId() { return id; }
+    public UUID getProposalId() { return proposalId; }
     public String getStatus() { return status; }
     public String getExternalReference() { return externalReference; }
+    public Instant getExecutedAt() { return executedAt; }
 }
