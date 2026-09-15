@@ -82,7 +82,7 @@ function App() {
     const [traces, setTraces] = useState<OperationTraceEvent[]>([])
     const [connection, setConnection] = useState<ConnectionState>('CONNECTING')
     const [followLive, setFollowLive] = useState(true)
-    const [selectedSequence, setSelectedSequence] = useState<number | null>(null)
+    const [selectedSnapshot, setSelectedSnapshot] = useState<OperationTraceEvent | null>(null)
     const lastSequence = useRef(0)
     const buffering = useRef(true)
     const pendingLive = useRef<OperationTraceEvent[]>([])
@@ -151,11 +151,7 @@ function App() {
     }, [])
 
     const latest = traces.length ? traces[traces.length - 1] : null
-    useEffect(() => {
-        if (followLive && latest && selectedSequence !== latest.sequence) setSelectedSequence(latest.sequence)
-    }, [followLive, latest, selectedSequence])
-
-    const selected = traces.find(item => item.sequence === selectedSequence) ?? latest
+    const selected = followLive ? latest : selectedSnapshot
     const latestByStage = useMemo(() => {
         const map = new Map<TraceStage, OperationTraceEvent>()
         traces.forEach(item => map.set(item.stage, item))
@@ -192,12 +188,12 @@ function App() {
                 <div className="event-tape">
                     <div className="panel-heading">
                         <div><span className="panel-kicker">LIVE EVENT TAPE</span><h2>Durable decision stream</h2></div>
-                        <button className={followLive ? 'follow active' : 'follow'} onClick={() => setFollowLive(value => !value)}>{followLive ? '● Following live' : 'Follow live'}</button>
+                        <button className={followLive ? 'follow active' : 'follow'} onClick={() => { setFollowLive(value => !value); setSelectedSnapshot(null) }}>{followLive ? '● Following live' : 'Follow live'}</button>
                     </div>
                     <div className="tape-list">
                         {visibleTape.length === 0 && <div className="empty">Waiting for operation traces...</div>}
                         {visibleTape.map(item => (
-                            <button key={item.sequence} className={`trace-row trace-${item.stage.toLowerCase()} ${selected?.sequence === item.sequence ? 'selected' : ''}`} onClick={() => { setFollowLive(false); setSelectedSequence(item.sequence) }}>
+                            <button key={item.sequence} className={`trace-row trace-${item.stage.toLowerCase()} ${selected?.sequence === item.sequence ? 'selected' : ''}`} onClick={() => { setFollowLive(false); setSelectedSnapshot(item) }}>
                                 <span className="trace-sequence">#{item.sequence}</span><span className={`stage-pill pill-${item.stage.toLowerCase()}`}>{item.stage}</span><span className="trace-time">{formatTime(item.recordedAt)}</span><span className="trace-content"><strong>{item.eventType}</strong><span>{item.summary}</span></span>
                             </button>
                         ))}
