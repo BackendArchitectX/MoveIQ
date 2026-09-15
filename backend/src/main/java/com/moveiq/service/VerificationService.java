@@ -1,6 +1,6 @@
 package com.moveiq.service;
 
-import com.moveiq.api.dto.MobilityEvent;
+import com.moveiq.api.dto.OperationTraceEvent;
 import com.moveiq.api.dto.VerificationSnapshot;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -10,6 +10,8 @@ import java.util.UUID;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.event.TransactionPhase;
+import org.springframework.transaction.event.TransactionalEventListener;
 
 @Service
 public class VerificationService {
@@ -20,24 +22,42 @@ public class VerificationService {
 
     public VerificationService(JdbcTemplate jdbc) { this.jdbc = jdbc; }
 
+    /**
+     * Consume committed trace events so VERIFY cannot observe an event that later rolls back.
+     * This also avoids coupling the core processing and action services to the projection.
+     */
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     @Transactional
-    public void start(UUID executionId, UUID situationId) {
+    public void onTrace(OperationTraceEvent trace) {
+        if ("ACTION_EXECUTED".equals(trace.eventType()) && trace.situationId() != null) {
+            Object executionId = trace.evidence().get("executionId");
+            if (executionId != null) start(UUID.fromString(executionId.toString()), trace.situationId());
+            return;
+        }
+        if (!"EVENT_ACCEPTED".equals(trace.eventType()) || trace.scopeKey() == null) return;
+        Object delayValue = trace.evidence().get("delayMinutes");
+        if (!(delayValue instanceof Number delay)) return;
+        String[] scope = trace.scopeKey().split("\\|", -1);
+        if (scope.length < 4) return;
+        observe(scope[0], nullableScope(scope[1]), nullableScope(scope[2]), nullableScope(scope[3]),
+                trace.eventTime(), Math.max(delay.doubleValue(), 0));
+    }
+
+    private void start(UUID executionId, UUID situationId) {
         jdbc.update("""
                 INSERT INTO moveiq.verification_snapshot(
                     execution_id, situation_id, business_unit, office, shift, direction,
                     baseline_event_time, baseline_avg_delay, methodology_version)
                 SELECT ?, situation_id, business_unit, office, shift, direction,
                        event_time, current_avg_delay, ?
-                FROM moveiq.reason_snapshot
-                WHERE situation_id = ?
+                FROM moveiq.reason_snapshot WHERE situation_id = ?
                 ON CONFLICT (execution_id) DO NOTHING
                 """, executionId, METHODOLOGY, situationId);
     }
 
-    /** Observe only events strictly after the action evidence cutoff; replay never reads future events. */
-    @Transactional
-    public void observe(MobilityEvent event) {
-        double delay = Math.max(event.delayMinutes(), 0);
+    /** Only committed events strictly after the evidence cutoff are observational samples. */
+    private void observe(String businessUnit, String office, String shift, String direction,
+                         java.time.Instant eventTime, double delay) {
         jdbc.update("""
                 UPDATE moveiq.verification_snapshot
                 SET observed_sample_size = observed_sample_size + 1,
@@ -59,7 +79,7 @@ public class VerificationService {
                   AND baseline_event_time < ?
                 """,
                 delay, MIN_SAMPLE, delay, MATERIAL_CHANGE_PCT, delay, MATERIAL_CHANGE_PCT,
-                event.businessUnit(), event.office(), event.shift(), event.direction(), Timestamp.from(event.occurredAt()));
+                businessUnit, office, shift, direction, Timestamp.from(eventTime));
     }
 
     @Transactional(readOnly = true)
@@ -83,6 +103,8 @@ public class VerificationService {
                 nullableDouble(rs, "change_pct"), rs.getString("outcome"), rs.getString("methodology_version"),
                 rs.getTimestamp("updated_at").toInstant());
     }
+
+    private String nullableScope(String value) { return "_".equals(value) ? null : value; }
 
     private Double nullableDouble(ResultSet rs, String column) throws SQLException {
         double value = rs.getDouble(column);
