@@ -19,6 +19,12 @@ public class SlidingWindowSignalDetector {
      * The entire sliding-window transition is one Redis script so concurrent Kafka consumers cannot
      * interleave add/prune/count/latch operations. All keys use the same Redis Cluster hash tag.
      *
+     * <p>The threshold latch stores the event id that first crossed the threshold, rather than a
+     * boolean. This is intentional: Redis is not enlisted in the surrounding PostgreSQL transaction.
+     * If PostgreSQL rolls back after Redis has latched the crossing, Kafka can retry the same event
+     * and Redis will return the same crossing owner. A later event sees the active latch but cannot
+     * impersonate the owner, preventing duplicate downstream signals.
+     *
      * <p>The watermark is monotonic. A late event older than the active event-time window is accepted
      * by the ingestion layer but is not allowed to move the detector backwards or leak future events
      * into an earlier window.
@@ -66,22 +72,27 @@ public class SlidingWindowSignalDetector {
                 end
             end
 
-            local latched = redis.call('EXISTS', KEYS[3])
+            local latchOwner = redis.call('GET', KEYS[3]) or ''
             local crossed = 0
             if count >= threshold then
-                if latched == 0 then
-                    redis.call('SET', KEYS[3], '1', 'EX', ttlSeconds)
+                if latchOwner == '' then
+                    latchOwner = eventId
+                    redis.call('SET', KEYS[3], eventId, 'EX', ttlSeconds)
+                    crossed = 1
+                elseif latchOwner == eventId then
+                    -- Same threshold event is being retried after a downstream transaction failure.
                     crossed = 1
                 end
-            elseif latched == 1 then
+            elseif latchOwner ~= '' then
                 redis.call('DEL', KEYS[3])
+                latchOwner = ''
             end
 
             redis.call('EXPIRE', KEYS[1], ttlSeconds)
             redis.call('EXPIRE', KEYS[2], ttlSeconds)
             redis.call('EXPIRE', KEYS[4], ttlSeconds)
 
-            return {count, affectedTotal, delayTotal, crossed, included, watermark}
+            return {count, affectedTotal, delayTotal, crossed, included, watermark, latchOwner}
             """;
 
     @SuppressWarnings("rawtypes")
@@ -98,16 +109,9 @@ public class SlidingWindowSignalDetector {
             @Value("${moveiq.detection.window-minutes:15}") long windowMinutes,
             @Value("${moveiq.detection.redis-ttl-minutes:60}") long ttlMinutes,
             @Value("${moveiq.detection.event-threshold:3}") int threshold) {
-        if (windowMinutes <= 0) {
-            throw new IllegalArgumentException("Detection window must be positive");
-        }
-        if (ttlMinutes <= 0) {
-            throw new IllegalArgumentException("Redis TTL must be positive");
-        }
-        if (threshold <= 0) {
-            throw new IllegalArgumentException("Detection threshold must be positive");
-        }
-
+        if (windowMinutes <= 0) throw new IllegalArgumentException("Detection window must be positive");
+        if (ttlMinutes <= 0) throw new IllegalArgumentException("Redis TTL must be positive");
+        if (threshold <= 0) throw new IllegalArgumentException("Detection threshold must be positive");
         this.redis = redis;
         this.window = Duration.ofMinutes(windowMinutes);
         this.keyTtl = Duration.ofMinutes(ttlMinutes);
@@ -116,21 +120,9 @@ public class SlidingWindowSignalDetector {
 
     public DetectionEvaluation evaluate(MobilityEvent event) {
         if (isSafetyCritical(event.eventType())) {
-            DetectedSignal signal = toSignal(
-                    event,
-                    1,
-                    event.affectedEmployees(),
-                    event.delayMinutes(),
-                    "SAFETY_RISK");
-            return new DetectionEvaluation(
-                    1,
-                    1,
-                    event.affectedEmployees(),
-                    event.delayMinutes(),
-                    true,
-                    true,
-                    event.occurredAt().toEpochMilli(),
-                    Optional.of(signal));
+            DetectedSignal signal = toSignal(event, 1, event.affectedEmployees(), event.delayMinutes(), "SAFETY_RISK");
+            return new DetectionEvaluation(1, 1, event.affectedEmployees(), event.delayMinutes(), true, true,
+                    event.occurredAt().toEpochMilli(), Optional.of(signal));
         }
 
         String tag = scopeTag(event);
@@ -142,17 +134,11 @@ public class SlidingWindowSignalDetector {
 
         @SuppressWarnings("unchecked")
         List<Object> result = redis.execute(
-                WINDOW_SCRIPT,
-                keys,
-                event.eventId(),
-                Long.toString(event.occurredAt().toEpochMilli()),
-                Long.toString(window.toMillis()),
-                Long.toString(keyTtl.toSeconds()),
-                Integer.toString(threshold),
-                Long.toString(event.affectedEmployees()),
-                Long.toString(event.delayMinutes()));
+                WINDOW_SCRIPT, keys, event.eventId(), Long.toString(event.occurredAt().toEpochMilli()),
+                Long.toString(window.toMillis()), Long.toString(keyTtl.toSeconds()), Integer.toString(threshold),
+                Long.toString(event.affectedEmployees()), Long.toString(event.delayMinutes()));
 
-        if (result == null || result.size() < 6) {
+        if (result == null || result.size() < 7) {
             throw new IllegalStateException("Redis detection script returned an invalid result");
         }
 
@@ -162,20 +148,17 @@ public class SlidingWindowSignalDetector {
         boolean crossed = asLong(result.get(3)) == 1L;
         boolean included = asLong(result.get(4)) == 1L;
         long watermark = asLong(result.get(5));
+        String latchOwner = asString(result.get(6));
 
-        Optional<DetectedSignal> signal = crossed
+        // A retry may have included=false because ZADD NX already accepted this event in Redis.
+        // Ownership, not inclusion, determines whether the durable downstream transition is retried.
+        boolean ownsCrossing = crossed && event.eventId().equals(latchOwner);
+        Optional<DetectedSignal> signal = ownsCrossing
                 ? Optional.of(toSignal(event, observed, affected, delay, "MOBILITY_DISRUPTION"))
                 : Optional.empty();
 
-        return new DetectionEvaluation(
-                boundedCount(observed),
-                threshold,
-                affected,
-                delay,
-                crossed,
-                included,
-                watermark,
-                signal);
+        return new DetectionEvaluation(boundedCount(observed), threshold, affected, delay, crossed, included,
+                watermark, signal);
     }
 
     private boolean isSafetyCritical(String type) {
@@ -183,35 +166,14 @@ public class SlidingWindowSignalDetector {
     }
 
     private String scopeTag(MobilityEvent event) {
-        String scope = String.join(
-                "|",
-                safe(event.businessUnit()),
-                safe(event.office()),
-                safe(event.shift()),
-                safe(event.direction()),
-                safe(event.eventType()));
-        return Base64.getUrlEncoder()
-                .withoutPadding()
-                .encodeToString(scope.getBytes(StandardCharsets.UTF_8));
+        String scope = String.join("|", safe(event.businessUnit()), safe(event.office()), safe(event.shift()),
+                safe(event.direction()), safe(event.eventType()));
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(scope.getBytes(StandardCharsets.UTF_8));
     }
 
-    private DetectedSignal toSignal(
-            MobilityEvent event,
-            long count,
-            long affectedEmployees,
-            long delayMinutes,
-            String type) {
-        return new DetectedSignal(
-                event.eventId(),
-                event.businessUnit(),
-                type,
-                event.office(),
-                event.shift(),
-                event.direction(),
-                affectedEmployees,
-                delayMinutes,
-                boundedCount(count),
-                event.occurredAt());
+    private DetectedSignal toSignal(MobilityEvent event, long count, long affectedEmployees, long delayMinutes, String type) {
+        return new DetectedSignal(event.eventId(), event.businessUnit(), type, event.office(), event.shift(),
+                event.direction(), affectedEmployees, delayMinutes, boundedCount(count), event.occurredAt());
     }
 
     private int boundedCount(long count) {
@@ -219,10 +181,13 @@ public class SlidingWindowSignalDetector {
     }
 
     private long asLong(Object value) {
-        if (value instanceof Number number) {
-            return number.longValue();
-        }
+        if (value instanceof Number number) return number.longValue();
         return Long.parseLong(String.valueOf(value));
+    }
+
+    private String asString(Object value) {
+        if (value instanceof byte[] bytes) return new String(bytes, StandardCharsets.UTF_8);
+        return value == null ? "" : String.valueOf(value);
     }
 
     private static String safe(String value) {
