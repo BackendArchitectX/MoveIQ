@@ -15,12 +15,7 @@ class SlidingWindowSignalDetectorTest {
     void thresholdCrossingUsesAggregateWindowEvidence() {
         Instant occurredAt = Instant.parse("2026-07-15T02:00:00Z");
         FakeRedisTemplate redis = new FakeRedisTemplate(List.of(
-                3L,
-                66L,
-                81L,
-                1L,
-                1L,
-                occurredAt.toEpochMilli()));
+                3L, 66L, 81L, 1L, 1L, occurredAt.toEpochMilli(), bytes("evt-3")));
         SlidingWindowSignalDetector detector = new SlidingWindowSignalDetector(redis, 15, 60, 3);
 
         DetectionEvaluation evaluation = detector.evaluate(event("evt-3", "LATE_ARRIVAL", 23, 23, occurredAt));
@@ -38,15 +33,39 @@ class SlidingWindowSignalDetectorTest {
     }
 
     @Test
+    void retryOfThresholdOwnerReEmitsSignalEvenWhenRedisAlreadyContainsEvent() {
+        Instant occurredAt = Instant.parse("2026-07-15T02:00:00Z");
+        FakeRedisTemplate redis = new FakeRedisTemplate(List.of(
+                3L, 66L, 81L, 1L, 0L, occurredAt.toEpochMilli(), bytes("evt-3")));
+        SlidingWindowSignalDetector detector = new SlidingWindowSignalDetector(redis, 15, 60, 3);
+
+        DetectionEvaluation evaluation = detector.evaluate(event("evt-3", "LATE_ARRIVAL", 23, 23, occurredAt));
+
+        assertTrue(evaluation.thresholdCrossed());
+        assertFalse(evaluation.includedInWindow());
+        assertTrue(evaluation.signal().isPresent(), "crossing owner must survive a PostgreSQL rollback/retry");
+        assertEquals("evt-3", evaluation.signal().orElseThrow().sourceEventId());
+    }
+
+    @Test
+    void laterEventCannotReEmitSignalOwnedByEarlierThresholdEvent() {
+        Instant occurredAt = Instant.parse("2026-07-15T02:01:00Z");
+        FakeRedisTemplate redis = new FakeRedisTemplate(List.of(
+                4L, 90L, 105L, 0L, 1L, occurredAt.toEpochMilli(), bytes("evt-3")));
+        SlidingWindowSignalDetector detector = new SlidingWindowSignalDetector(redis, 15, 60, 3);
+
+        DetectionEvaluation evaluation = detector.evaluate(event("evt-4", "LATE_ARRIVAL", 24, 24, occurredAt));
+
+        assertFalse(evaluation.thresholdCrossed());
+        assertTrue(evaluation.includedInWindow());
+        assertTrue(evaluation.signal().isEmpty());
+    }
+
+    @Test
     void windowProgressDoesNotEmitSignalBeforeThreshold() {
         Instant occurredAt = Instant.parse("2026-07-15T02:00:00Z");
         FakeRedisTemplate redis = new FakeRedisTemplate(List.of(
-                2L,
-                37L,
-                44L,
-                0L,
-                1L,
-                occurredAt.toEpochMilli()));
+                2L, 37L, 44L, 0L, 1L, occurredAt.toEpochMilli(), bytes("")));
         SlidingWindowSignalDetector detector = new SlidingWindowSignalDetector(redis, 15, 60, 3);
 
         DetectionEvaluation evaluation = detector.evaluate(event("evt-2", "LATE_ARRIVAL", 19, 22, occurredAt));
@@ -79,24 +98,13 @@ class SlidingWindowSignalDetectorTest {
         assertThrows(IllegalArgumentException.class, () -> new SlidingWindowSignalDetector(redis, 15, 60, 0));
     }
 
-    private MobilityEvent event(
-            String eventId,
-            String eventType,
-            long affectedEmployees,
-            long delayMinutes,
-            Instant occurredAt) {
-        return new MobilityEvent(
-                eventId,
-                "PUNE",
-                1L,
-                eventType,
-                "HINJEWADI",
-                "09:00",
-                "IN",
-                "Vendor-A",
-                affectedEmployees,
-                delayMinutes,
-                occurredAt);
+    private static byte[] bytes(String value) {
+        return value.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    private MobilityEvent event(String eventId, String eventType, long affectedEmployees, long delayMinutes, Instant occurredAt) {
+        return new MobilityEvent(eventId, "PUNE", 1L, eventType, "HINJEWADI", "09:00", "IN", "Vendor-A",
+                affectedEmployees, delayMinutes, occurredAt);
     }
 
     private static final class FakeRedisTemplate extends StringRedisTemplate {
