@@ -36,11 +36,11 @@ public class LiveStreamController {
     }
 
     private long parseCursor(String lastEventId) {
-        if (lastEventId == null || lastEventId.isBlank()) return 0L;
+        if (lastEventId == null || lastEventId.isBlank()) return -1L;
         try {
             return Math.max(0L, Long.parseLong(lastEventId));
         } catch (NumberFormatException ignored) {
-            return 0L;
+            return -1L;
         }
     }
 }
