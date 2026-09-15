@@ -15,11 +15,12 @@ export type OperationTraceEvent = {
 }
 
 const PAGE_SIZE = 500
+export const TRACE_RETENTION = 1000
 
 export async function loadTraceHistory(
     after: number
 ): Promise<OperationTraceEvent[]> {
-    const all: OperationTraceEvent[] = []
+    let retained: OperationTraceEvent[] = []
     let cursor = after
 
     while (true) {
@@ -42,7 +43,9 @@ export async function loadTraceHistory(
                     ? body.value
                     : []
 
-        all.push(...batch)
+        // Catch-up may span a very large durable history. Advance through every page so
+        // lastSequence reaches the live frontier, but retain only the UI working set.
+        retained = [...retained, ...batch].slice(-TRACE_RETENTION)
 
         if (batch.length < PAGE_SIZE) {
             break
@@ -51,5 +54,5 @@ export async function loadTraceHistory(
         cursor = batch[batch.length - 1].sequence
     }
 
-    return all
+    return retained
 }
