@@ -6,4 +6,5 @@ import java.time.Instant;
 public record ControlRoomState(
         ReplayState source,
         ReasoningSnapshot reason,
+        VerificationSnapshot verify,
         Instant generatedAt) {}
