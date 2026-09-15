@@ -85,6 +85,7 @@ function App() {
     const lastSequence = useRef(0)
     const buffering = useRef(true)
     const pendingLive = useRef<OperationTraceEvent[]>([])
+    const syncGeneration = useRef(0)
 
     function merge(incoming: OperationTraceEvent[]) {
         if (incoming.length === 0) return
@@ -103,18 +104,25 @@ function App() {
 
         const connected = async () => {
             if (disposed) return
+            const generation = ++syncGeneration.current
             setConnection('SYNCING')
             buffering.current = true
             try {
                 const history = await loadTraceHistory(lastSequence.current)
-                if (disposed) return
+                if (disposed || generation !== syncGeneration.current) return
                 const buffered = pendingLive.current
                 pendingLive.current = []
                 merge([...history, ...buffered])
                 buffering.current = false
                 setConnection('LIVE')
             } catch (error) {
+                if (disposed || generation !== syncGeneration.current) return
                 console.error('Trace catch-up failed', error)
+                // Live events received while catch-up was in flight are still valid backend evidence.
+                // Preserve them, but remain DEGRADED because a history gap cannot be ruled out.
+                const buffered = pendingLive.current
+                pendingLive.current = []
+                merge(buffered)
                 buffering.current = false
                 setConnection('DEGRADED')
             }
@@ -132,8 +140,15 @@ function App() {
 
         source.addEventListener('connected', connected)
         source.addEventListener('trace', trace)
-        source.onerror = () => { if (!disposed) setConnection('RECONNECTING') }
-        return () => { disposed = true; source.close() }
+        source.onerror = () => {
+            if (!disposed) {
+                // Invalidate an in-flight history request so it cannot mark a disconnected stream LIVE.
+                syncGeneration.current++
+                buffering.current = true
+                setConnection('RECONNECTING')
+            }
+        }
+        return () => { disposed = true; syncGeneration.current++; source.close() }
     }, [])
 
     const latest = traces.length ? traces[traces.length - 1] : null
