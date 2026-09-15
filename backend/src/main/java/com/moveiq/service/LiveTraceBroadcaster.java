@@ -31,13 +31,15 @@ public class LiveTraceBroadcaster {
         try {
             synchronized (deliveryLock) {
                 long through = traces.latestSequence();
-                long cursor = Math.max(0L, afterSequence);
-                while (cursor < through) {
-                    List<OperationTraceEvent> page =
-                            traces.afterThrough(cursor, through, REPLAY_PAGE_SIZE);
-                    if (page.isEmpty()) break;
-                    for (OperationTraceEvent trace : page) sendTrace(emitter, trace);
-                    cursor = page.get(page.size() - 1).sequence();
+                if (afterSequence >= 0) {
+                    long cursor = afterSequence;
+                    while (cursor < through) {
+                        List<OperationTraceEvent> page =
+                                traces.afterThrough(cursor, through, REPLAY_PAGE_SIZE);
+                        if (page.isEmpty()) break;
+                        for (OperationTraceEvent trace : page) sendTrace(emitter, trace);
+                        cursor = page.get(page.size() - 1).sequence();
+                    }
                 }
                 emitters.add(emitter);
                 emitter.send(SseEmitter.event().name("connected").data(Map.of(
