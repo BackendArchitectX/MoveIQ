@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client'
 import { ActionPanel } from './ActionPanel'
 import { ReplayPanel } from './ReplayPanel'
 import { ReasonPanel } from './ReasonPanel'
+import { VerifyPanel } from './VerifyPanel'
 import { loadTraceHistory, OperationTraceEvent, TraceStage } from './live'
 import './styles.css'
 
@@ -168,12 +169,8 @@ function App() {
                     if (stage === 'SENSE') return <SenseCard key={stage} windowEvent={latestWindow} fallbackEvent={event} />
                     if (stage === 'REASON') return <ReasonPanel key={stage} />
                     if (stage === 'ACT') return <ActionPanel key={stage} />
-                    return (
-                        <article key={stage} className={`stage-card stage-${stage.toLowerCase()} ${event ? 'stage-active' : 'stage-waiting'}`}>
-                            <div className="stage-heading"><span>{stage}</span><span className="stage-status">{event ? 'BACKEND EVENT' : 'WAITING'}</span></div>
-                            {event ? <><strong className="event-type">{event.eventType}</strong><p>{event.summary}</p><small>#{event.sequence} · {formatTime(event.recordedAt)}</small></> : <p className="waiting-copy">Waiting for a durable {stage} event.</p>}
-                        </article>
-                    )
+                    if (stage === 'VERIFY') return <VerifyPanel key={stage} />
+                    return null
                 })}
             </section>
 
