@@ -1,7 +1,6 @@
 package com.moveiq.service;
 
 import com.moveiq.api.dto.MobilityEvent;
-import com.moveiq.api.dto.ReasoningSnapshot;
 import com.moveiq.api.dto.VerificationSnapshot;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -22,16 +21,17 @@ public class VerificationService {
     public VerificationService(JdbcTemplate jdbc) { this.jdbc = jdbc; }
 
     @Transactional
-    public void start(UUID executionId, ReasoningSnapshot reason) {
+    public void start(UUID executionId, UUID situationId) {
         jdbc.update("""
                 INSERT INTO moveiq.verification_snapshot(
                     execution_id, situation_id, business_unit, office, shift, direction,
                     baseline_event_time, baseline_avg_delay, methodology_version)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                SELECT ?, situation_id, business_unit, office, shift, direction,
+                       event_time, current_avg_delay, ?
+                FROM moveiq.reason_snapshot
+                WHERE situation_id = ?
                 ON CONFLICT (execution_id) DO NOTHING
-                """,
-                executionId, reason.situationId(), reason.businessUnit(), reason.office(), reason.shift(),
-                reason.direction(), Timestamp.from(reason.eventTime()), reason.currentAvgDelay(), METHODOLOGY);
+                """, executionId, METHODOLOGY, situationId);
     }
 
     /** Observe only events strictly after the action evidence cutoff; replay never reads future events. */
