@@ -9,6 +9,7 @@ import java.util.Optional;
 import java.util.UUID;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
@@ -22,12 +23,9 @@ public class VerificationService {
 
     public VerificationService(JdbcTemplate jdbc) { this.jdbc = jdbc; }
 
-    /**
-     * Consume committed trace events so VERIFY cannot observe an event that later rolls back.
-     * This also avoids coupling the core processing and action services to the projection.
-     */
+    /** Consume only committed trace events; REQUIRES_NEW makes projection writes durable after source commit. */
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void onTrace(OperationTraceEvent trace) {
         if ("ACTION_EXECUTED".equals(trace.eventType()) && trace.situationId() != null) {
             Object executionId = trace.evidence().get("executionId");
@@ -55,7 +53,6 @@ public class VerificationService {
                 """, executionId, METHODOLOGY, situationId);
     }
 
-    /** Only committed events strictly after the evidence cutoff are observational samples. */
     private void observe(String businessUnit, String office, String shift, String direction,
                          java.time.Instant eventTime, double delay) {
         jdbc.update("""
@@ -105,7 +102,6 @@ public class VerificationService {
     }
 
     private String nullableScope(String value) { return "_".equals(value) ? null : value; }
-
     private Double nullableDouble(ResultSet rs, String column) throws SQLException {
         double value = rs.getDouble(column);
         return rs.wasNull() ? null : value;
