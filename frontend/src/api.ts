@@ -41,9 +41,23 @@ export type ReasoningSnapshot = {
     computedAt: string
 }
 
+export type VerificationSnapshot = {
+    executionId: string
+    situationId: string
+    baselineEventTime: string
+    baselineAvgDelay: number
+    observedSampleSize: number
+    observedAvgDelay: number | null
+    changePct: number | null
+    outcome: 'OBSERVED_IMPROVEMENT' | 'NO_MATERIAL_CHANGE' | 'WORSENED' | 'INSUFFICIENT_EVIDENCE'
+    methodologyVersion: string
+    updatedAt: string
+}
+
 export type ControlRoomState = {
     source: ReplayState
     reason: ReasoningSnapshot | null
+    verify: VerificationSnapshot | null
     generatedAt: string
 }
 
@@ -105,12 +119,10 @@ async function replayRequest(
         headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
         body: body === undefined ? undefined : JSON.stringify(body)
     })
-
     if (!response.ok) {
         const detail = await response.text()
         throw new Error(detail || `Replay request failed: ${response.status}`)
     }
-
     return response.json()
 }
 
