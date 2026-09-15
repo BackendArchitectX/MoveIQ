@@ -22,18 +22,25 @@ public class LiveStreamController {
         this.traces = traces;
     }
 
-    @GetMapping(
-            value = "/stream",
-            produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter stream() {
-        return broadcaster.subscribe();
+    @GetMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter stream(
+            @RequestHeader(value = "Last-Event-ID", required = false) String lastEventId) {
+        return broadcaster.subscribe(parseCursor(lastEventId));
     }
 
     @GetMapping("/history")
     public List<OperationTraceEvent> history(
             @RequestParam(defaultValue = "0") long after,
             @RequestParam(defaultValue = "100") int limit) {
-
         return traces.after(after, limit);
+    }
+
+    private long parseCursor(String lastEventId) {
+        if (lastEventId == null || lastEventId.isBlank()) return 0L;
+        try {
+            return Math.max(0L, Long.parseLong(lastEventId));
+        } catch (NumberFormatException ignored) {
+            return 0L;
+        }
     }
 }

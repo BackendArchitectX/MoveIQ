@@ -16,54 +16,48 @@ public class OperationTraceQueryService {
     private final JdbcTemplate jdbc;
     private final ObjectMapper objectMapper;
 
-    public OperationTraceQueryService(
-            JdbcTemplate jdbc,
-            ObjectMapper objectMapper) {
+    public OperationTraceQueryService(JdbcTemplate jdbc, ObjectMapper objectMapper) {
         this.jdbc = jdbc;
         this.objectMapper = objectMapper;
     }
 
     public List<OperationTraceEvent> after(long sequence, int limit) {
         int boundedLimit = Math.max(1, Math.min(limit, 500));
+        return queryAfter(sequence, Long.MAX_VALUE, boundedLimit);
+    }
 
+    public long latestSequence() {
+        Long latest = jdbc.queryForObject(
+                "SELECT COALESCE(MAX(sequence), 0) FROM moveiq.operation_trace", Long.class);
+        return latest == null ? 0L : latest;
+    }
+
+    public List<OperationTraceEvent> afterThrough(long sequence, long through, int limit) {
+        int boundedLimit = Math.max(1, Math.min(limit, 500));
+        return queryAfter(sequence, through, boundedLimit);
+    }
+
+    private List<OperationTraceEvent> queryAfter(long sequence, long through, int limit) {
         return jdbc.query(
                 """
-                SELECT sequence,
-                       session_id,
-                       situation_id,
-                       source_event_id,
-                       scope_key,
-                       stage,
-                       event_type,
-                       event_time,
-                       recorded_at,
-                       summary,
-                       evidence
+                SELECT sequence, session_id, situation_id, source_event_id, scope_key,
+                       stage, event_type, event_time, recorded_at, summary, evidence
                 FROM moveiq.operation_trace
-                WHERE sequence > ?
+                WHERE sequence > ? AND sequence <= ?
                 ORDER BY sequence
                 LIMIT ?
                 """,
-                (rs, rowNum) -> map(rs, rowNum),
-                sequence,
-                boundedLimit);
+                (rs, rowNum) -> map(rs, rowNum), sequence, through, limit);
     }
 
-    private OperationTraceEvent map(ResultSet rs, int rowNum)
-            throws SQLException {
-
+    private OperationTraceEvent map(ResultSet rs, int rowNum) throws SQLException {
         Map<String, Object> evidence;
-
         try {
             evidence = objectMapper.readValue(
-                    rs.getString("evidence"),
-                    new TypeReference<Map<String, Object>>() {});
+                    rs.getString("evidence"), new TypeReference<Map<String, Object>>() {});
         } catch (Exception e) {
-            throw new SQLException(
-                    "Unable to deserialize operation trace evidence",
-                    e);
+            throw new SQLException("Unable to deserialize operation trace evidence", e);
         }
-
         return new OperationTraceEvent(
                 rs.getLong("sequence"),
                 rs.getObject("session_id", java.util.UUID.class),
