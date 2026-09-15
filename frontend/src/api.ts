@@ -47,6 +47,21 @@ export type ControlRoomState = {
     generatedAt: string
 }
 
+export type ActionProposal = {
+    id: string
+    situationId: string
+    actionType: string
+    status: string
+    evidenceHash: string
+}
+
+export type ExecutionReceipt = {
+    executionId: string
+    proposalId: string
+    status: string
+    externalReference: string | null
+}
+
 export async function getSituations(): Promise<Situation[]> {
     const response = await fetch('/api/v1/situations')
     if (!response.ok) throw new Error(`Failed to load situations: ${response.status}`)
@@ -57,6 +72,27 @@ export async function getControlRoomState(): Promise<ControlRoomState> {
     const response = await fetch('/api/v1/control-room/state')
     if (!response.ok) throw new Error(`Failed to load control-room state: ${response.status}`)
     return response.json()
+}
+
+async function jsonRequest<T>(path: string, method: 'POST' | 'PUT', body: unknown): Promise<T> {
+    const response = await fetch(path, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+    })
+    if (!response.ok) {
+        const detail = await response.text()
+        throw new Error(detail || `Request failed: ${response.status}`)
+    }
+    return response.json()
+}
+
+export function proposeAction(situationId: string, actionType: string) {
+    return jsonRequest<ActionProposal>(`/api/v1/situations/${situationId}/actions`, 'POST', { actionType })
+}
+
+export function approveAction(proposalId: string, approvedBy: string, idempotencyKey: string) {
+    return jsonRequest<ExecutionReceipt>(`/api/v1/actions/${proposalId}/approve`, 'POST', { approvedBy, idempotencyKey })
 }
 
 async function replayRequest(
