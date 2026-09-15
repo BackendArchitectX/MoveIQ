@@ -10,6 +10,7 @@ import './styles.css'
 type ConnectionState = 'CONNECTING' | 'SYNCING' | 'LIVE' | 'RECONNECTING' | 'DEGRADED'
 
 const STAGES: TraceStage[] = ['SENSE', 'REASON', 'ACT', 'VERIFY']
+const TRACE_RETENTION = 1000
 
 function formatTime(value: string) {
     const date = new Date(value)
@@ -94,7 +95,8 @@ function App() {
             const bySequence = new Map<number, OperationTraceEvent>()
             current.forEach(item => bySequence.set(item.sequence, item))
             incoming.forEach(item => bySequence.set(item.sequence, item))
-            return [...bySequence.values()].sort((a, b) => a.sequence - b.sequence)
+            const ordered = [...bySequence.values()].sort((a, b) => a.sequence - b.sequence)
+            return ordered.length > TRACE_RETENTION ? ordered.slice(-TRACE_RETENTION) : ordered
         })
     }
 
@@ -118,8 +120,6 @@ function App() {
             } catch (error) {
                 if (disposed || generation !== syncGeneration.current) return
                 console.error('Trace catch-up failed', error)
-                // Live events received while catch-up was in flight are still valid backend evidence.
-                // Preserve them, but remain DEGRADED because a history gap cannot be ruled out.
                 const buffered = pendingLive.current
                 pendingLive.current = []
                 merge(buffered)
@@ -142,7 +142,6 @@ function App() {
         source.addEventListener('trace', trace)
         source.onerror = () => {
             if (!disposed) {
-                // Invalidate an in-flight history request so it cannot mark a disconnected stream LIVE.
                 syncGeneration.current++
                 buffering.current = true
                 setConnection('RECONNECTING')
