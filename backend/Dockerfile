@@ -6,6 +6,6 @@ RUN mvn -B -DskipTests package
 
 FROM eclipse-temurin:17-jre
 WORKDIR /app
-COPY --from=build /workspace/target/moveiq-backend-0.1.0.jar app.jar
+COPY --from=build /workspace/target/moveiq-backend-*.jar app.jar
 EXPOSE 8080
 ENTRYPOINT ["java","-XX:MaxRAMPercentage=75.0","-jar","app.jar"]
