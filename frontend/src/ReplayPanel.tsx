@@ -27,7 +27,13 @@ export function ReplayPanel() {
         try {
             const next = await getReplayState()
             setState(next)
-            setSpeed(next.speed)
+
+            // While stopped, preserve the speed selected by the operator.
+            // Once replay is active, the backend is authoritative.
+            if (next.status === 'RUNNING' || next.status === 'PAUSED') {
+                setSpeed(next.speed)
+            }
+
             setError(null)
         } catch (cause) {
             setError(cause instanceof Error ? cause.message : String(cause))

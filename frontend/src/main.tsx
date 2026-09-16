@@ -1,222 +1,727 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+﻿import React, {
+    useEffect,
+    useMemo,
+    useRef,
+    useState
+} from 'react'
 import ReactDOM from 'react-dom/client'
-import { ActionPanel } from './ActionPanel'
+
+import {
+    getCurrentDecisionDossier
+} from './api'
+
+import type {
+    DecisionDossier
+} from './api'
+
+import {
+    ActionPanel,
+    ReasonPanel,
+    SensePanel,
+    VerifyPanel
+} from './DecisionPanels'
+
 import { ReplayPanel } from './ReplayPanel'
-import { ReasonPanel } from './ReasonPanel'
-import { VerifyPanel } from './VerifyPanel'
-import { loadTraceHistory, OperationTraceEvent, TraceStage } from './live'
+
+import {
+    loadTraceHistory
+} from './live'
+
+import type {
+    OperationTraceEvent
+} from './live'
+
 import './styles.css'
 
-type ConnectionState = 'CONNECTING' | 'SYNCING' | 'LIVE' | 'RECONNECTING' | 'DEGRADED'
-
-const STAGES: TraceStage[] = ['SENSE', 'REASON', 'ACT', 'VERIFY']
-const TRACE_RETENTION = 1000
+type ConnectionState =
+    | 'CONNECTING'
+    | 'SYNCING'
+    | 'LIVE'
+    | 'RECONNECTING'
+    | 'DEGRADED'
 
 function formatTime(value: string) {
     const date = new Date(value)
-    if (Number.isNaN(date.getTime())) return value
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-}
 
-function formatEvidence(evidence: Record<string, unknown>) {
-    return Object.entries(evidence).map(([key, value]) => `${key}: ${String(value)}`).join(' · ')
-}
-
-function evidenceNumber(event: OperationTraceEvent | undefined, key: string) {
-    const value = event?.evidence[key]
-    if (typeof value === 'number' && Number.isFinite(value)) return value
-    if (typeof value === 'string') {
-        const parsed = Number(value)
-        if (Number.isFinite(parsed)) return parsed
+    if (Number.isNaN(date.getTime())) {
+        return value
     }
-    return null
-}
 
-function evidenceBoolean(event: OperationTraceEvent | undefined, key: string) {
-    const value = event?.evidence[key]
-    return value === true || value === 'true'
-}
-
-function SenseCard({ windowEvent, fallbackEvent }: { windowEvent?: OperationTraceEvent; fallbackEvent?: OperationTraceEvent }) {
-    const event = windowEvent ?? fallbackEvent
-    const count = evidenceNumber(windowEvent, 'windowEventCount')
-    const threshold = evidenceNumber(windowEvent, 'threshold')
-    const affected = evidenceNumber(windowEvent, 'affectedEmployees')
-    const delay = evidenceNumber(windowEvent, 'delayMinutes')
-    const crossed = evidenceBoolean(windowEvent, 'thresholdCrossed')
-    const included = evidenceBoolean(windowEvent, 'includedInWindow')
-    const progress = count != null && threshold != null && threshold > 0 ? Math.min(100, Math.max(0, (count / threshold) * 100)) : 0
-    const steps = threshold && threshold > 0 ? Math.min(Math.floor(threshold), 12) : 0
-
-    return (
-        <article className={`stage-card stage-sense ${event ? 'stage-active' : 'stage-waiting'}`}>
-            <div className="stage-heading">
-                <span>SENSE</span>
-                <span className={`stage-status ${crossed ? 'status-detected' : ''}`}>{crossed ? 'THRESHOLD CROSSED' : event ? 'SENSING' : 'WAITING'}</span>
-            </div>
-            {windowEvent && count != null && threshold != null ? (
-                <>
-                    <div className="sense-window-row">
-                        <div><span className="sense-label">SLIDING WINDOW</span><strong className="sense-count">{count} / {threshold}</strong></div>
-                        <span className="sense-time">{formatTime(windowEvent.recordedAt)}</span>
-                    </div>
-                    <div className="sense-progress" role="progressbar" aria-label="Detection threshold progress" aria-valuemin={0} aria-valuemax={threshold} aria-valuenow={count}>
-                        <span style={{ width: `${progress}%` }} />
-                    </div>
-                    {steps > 0 && <div className="sense-steps" aria-hidden="true">{Array.from({ length: steps }).map((_, index) => <span key={index} className={index < count ? 'sense-step active' : 'sense-step'} />)}</div>}
-                    <div className="sense-metrics">
-                        <div><span>Affected</span><strong>{affected ?? '—'}</strong></div>
-                        <div><span>Delay evidence</span><strong>{delay == null ? '—' : `${delay}m`}</strong></div>
-                    </div>
-                    <p className="sense-scope" title={windowEvent.scopeKey ?? undefined}>{windowEvent.scopeKey ?? 'Unknown scope'}</p>
-                    {!included && <small className="sense-late">Latest accepted event was outside the active event-time window.</small>}
-                </>
-            ) : event ? (
-                <><strong className="event-type">{event.eventType}</strong><p>{event.summary}</p><small>#{event.sequence} · {formatTime(event.recordedAt)}</small></>
-            ) : <p className="waiting-copy">Waiting for backend detection state.</p>}
-        </article>
+    return date.toLocaleTimeString(
+        [],
+        {
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit'
+        }
     )
 }
 
-function App() {
-    const [traces, setTraces] = useState<OperationTraceEvent[]>([])
-    const [connection, setConnection] = useState<ConnectionState>('CONNECTING')
-    const [followLive, setFollowLive] = useState(true)
-    const [selectedSnapshot, setSelectedSnapshot] = useState<OperationTraceEvent | null>(null)
-    const lastSequence = useRef(0)
-    const buffering = useRef(true)
-    const pendingLive = useRef<OperationTraceEvent[]>([])
-    const syncGeneration = useRef(0)
+function formatEvidence(
+    evidence: Record<string, unknown>
+) {
+    return Object.entries(evidence)
+        .map(([key, value]) => {
+            if (
+                value !== null &&
+                typeof value === 'object'
+            ) {
+                return `${key}: ${JSON.stringify(value)}`
+            }
 
-    function merge(incoming: OperationTraceEvent[]) {
-        if (incoming.length === 0) return
-        lastSequence.current = Math.max(lastSequence.current, ...incoming.map(item => item.sequence))
-        setTraces(current => {
-            const bySequence = new Map<number, OperationTraceEvent>()
-            current.forEach(item => bySequence.set(item.sequence, item))
-            incoming.forEach(item => bySequence.set(item.sequence, item))
-            const ordered = [...bySequence.values()].sort((a, b) => a.sequence - b.sequence)
-            return ordered.length > TRACE_RETENTION ? ordered.slice(-TRACE_RETENTION) : ordered
+            return `${key}: ${String(value)}`
         })
+        .join(' · ')
+}
+
+function App() {
+    const [
+        connection,
+        setConnection
+    ] = useState<ConnectionState>(
+        'CONNECTING'
+    )
+
+    const [
+        transportSequence,
+        setTransportSequence
+    ] = useState(0)
+
+    const [
+        dossier,
+        setDossier
+    ] = useState<DecisionDossier | null>(
+        null
+    )
+
+    const [
+        dossierError,
+        setDossierError
+    ] = useState<string | null>(
+        null
+    )
+
+    const [
+        followLive,
+        setFollowLive
+    ] = useState(true)
+
+    const [
+        selectedSnapshot,
+        setSelectedSnapshot
+    ] = useState<OperationTraceEvent | null>(
+        null
+    )
+
+    const lastSequence =
+        useRef(0)
+
+    const buffering =
+        useRef(true)
+
+    const pendingLive =
+        useRef<OperationTraceEvent[]>([])
+
+    const syncGeneration =
+        useRef(0)
+
+    function observe(
+        incoming: OperationTraceEvent[]
+    ) {
+        if (incoming.length === 0) {
+            return
+        }
+
+        const maximum =
+            Math.max(
+                lastSequence.current,
+                ...incoming.map(
+                    item => item.sequence
+                )
+            )
+
+        lastSequence.current =
+            maximum
+
+        setTransportSequence(
+            maximum
+        )
     }
 
     useEffect(() => {
         let disposed = false
-        const source = new EventSource('/api/v1/live/stream')
 
-        const connected = async () => {
-            if (disposed) return
-            const generation = ++syncGeneration.current
-            setConnection('SYNCING')
-            buffering.current = true
-            try {
-                const history = await loadTraceHistory(lastSequence.current)
-                if (disposed || generation !== syncGeneration.current) return
-                const buffered = pendingLive.current
-                pendingLive.current = []
-                merge([...history, ...buffered])
-                buffering.current = false
-                setConnection('LIVE')
-            } catch (error) {
-                if (disposed || generation !== syncGeneration.current) return
-                console.error('Trace catch-up failed', error)
-                const buffered = pendingLive.current
-                pendingLive.current = []
-                merge(buffered)
-                buffering.current = false
-                setConnection('DEGRADED')
-            }
-        }
+        const source =
+            new EventSource(
+                '/api/v1/live/stream'
+            )
 
-        const trace = (event: Event) => {
-            try {
-                const parsed = JSON.parse((event as MessageEvent).data) as OperationTraceEvent
-                if (buffering.current) pendingLive.current.push(parsed)
-                else merge([parsed])
-            } catch (error) {
-                console.error('Invalid trace SSE payload', error)
-            }
-        }
+        const connected =
+            async () => {
+                if (disposed) {
+                    return
+                }
 
-        source.addEventListener('connected', connected)
-        source.addEventListener('trace', trace)
-        source.onerror = () => {
-            if (!disposed) {
-                syncGeneration.current++
-                buffering.current = true
-                setConnection('RECONNECTING')
+                const generation =
+                    ++syncGeneration.current
+
+                setConnection(
+                    'SYNCING'
+                )
+
+                buffering.current =
+                    true
+
+                try {
+                    const history =
+                        await loadTraceHistory(
+                            lastSequence.current
+                        )
+
+                    if (
+                        disposed ||
+                        generation !==
+                        syncGeneration.current
+                    ) {
+                        return
+                    }
+
+                    const buffered =
+                        pendingLive.current
+
+                    pendingLive.current =
+                        []
+
+                    observe([
+                        ...history,
+                        ...buffered
+                    ])
+
+                    buffering.current =
+                        false
+
+                    setConnection(
+                        'LIVE'
+                    )
+                } catch (error) {
+                    if (
+                        disposed ||
+                        generation !==
+                        syncGeneration.current
+                    ) {
+                        return
+                    }
+
+                    console.error(
+                        'Trace catch-up failed',
+                        error
+                    )
+
+                    const buffered =
+                        pendingLive.current
+
+                    pendingLive.current =
+                        []
+
+                    observe(
+                        buffered
+                    )
+
+                    buffering.current =
+                        false
+
+                    setConnection(
+                        'DEGRADED'
+                    )
+                }
             }
+
+        const trace =
+            (event: Event) => {
+                try {
+                    const parsed =
+                        JSON.parse(
+                            (
+                                event as MessageEvent
+                            ).data
+                        ) as OperationTraceEvent
+
+                    if (
+                        buffering.current
+                    ) {
+                        pendingLive.current.push(
+                            parsed
+                        )
+                    } else {
+                        observe([
+                            parsed
+                        ])
+                    }
+                } catch (error) {
+                    console.error(
+                        'Invalid trace SSE payload',
+                        error
+                    )
+                }
+            }
+
+        source.addEventListener(
+            'connected',
+            connected
+        )
+
+        source.addEventListener(
+            'trace',
+            trace
+        )
+
+        source.onerror =
+            () => {
+                if (!disposed) {
+                    syncGeneration.current++
+
+                    buffering.current =
+                        true
+
+                    setConnection(
+                        'RECONNECTING'
+                    )
+                }
+            }
+
+        return () => {
+            disposed = true
+            syncGeneration.current++
+            source.close()
         }
-        return () => { disposed = true; syncGeneration.current++; source.close() }
     }, [])
 
-    const latest = traces.length ? traces[traces.length - 1] : null
-    const selected = followLive ? latest : selectedSnapshot
-    const latestByStage = useMemo(() => {
-        const map = new Map<TraceStage, OperationTraceEvent>()
-        traces.forEach(item => map.set(item.stage, item))
-        return map
-    }, [traces])
-    const latestWindow = useMemo(() => [...traces].reverse().find(item => item.stage === 'SENSE' && item.eventType === 'WINDOW_UPDATED'), [traces])
-    const visibleTape = useMemo(() => [...traces].reverse().slice(0, 50), [traces])
+    useEffect(() => {
+        let disposed = false
+
+        let timer:
+            number |
+            undefined
+
+        const refresh =
+            async () => {
+                try {
+                    const current =
+                        await getCurrentDecisionDossier()
+
+                    if (!disposed) {
+                        setDossier(
+                            current
+                        )
+
+                        setDossierError(
+                            null
+                        )
+                    }
+                } catch (error) {
+                    if (!disposed) {
+                        setDossierError(
+                            error instanceof Error
+                                ? error.message
+                                : String(error)
+                        )
+                    }
+                } finally {
+                    if (!disposed) {
+                        timer =
+                            window.setTimeout(
+                                refresh,
+                                750
+                            )
+                    }
+                }
+            }
+
+        void refresh()
+
+        return () => {
+            disposed = true
+
+            if (
+                timer !== undefined
+            ) {
+                window.clearTimeout(
+                    timer
+                )
+            }
+        }
+    }, [])
+
+    const decisionId =
+        dossier?.caseInfo.decisionId ??
+        null
+
+    useEffect(() => {
+        setFollowLive(true)
+        setSelectedSnapshot(null)
+    }, [
+        decisionId
+    ])
+
+    const proof =
+        dossier?.proof ??
+        []
+
+    const latest =
+        proof.length > 0
+            ? proof[
+            proof.length - 1
+                ]
+            : null
+
+    const selected =
+        followLive
+            ? latest
+            : selectedSnapshot
+
+    const visibleTape =
+        useMemo(
+            () =>
+                [...proof]
+                    .reverse()
+                    .slice(
+                        0,
+                        50
+                    ),
+            [proof]
+        )
+
+    const displayedSequence =
+        Math.max(
+            transportSequence,
+            dossier?.latestSequence ??
+            0
+        )
 
     return (
         <main className="shell">
             <header className="topbar">
                 <div>
-                    <div className="brand-row"><span className="brand">MOVEIQ</span><span className={`connection connection-${connection.toLowerCase()}`}><span className="pulse-dot" />{connection}</span></div>
-                    <h1>Mobility Operations Control Room</h1>
-                    <p className="subtitle">Backend-generated decision state. No simulated browser metrics.</p>
+                    <div className="brand-row">
+                        <span className="brand">
+                            MOVEIQ
+                        </span>
+
+                        <span
+                            className={
+                                `connection connection-${connection.toLowerCase()}`
+                            }
+                        >
+                            <span className="pulse-dot" />
+                            {connection}
+                        </span>
+                    </div>
+
+                    <h1>
+                        Mobility Operations Control Room
+                    </h1>
+
+                    <p className="subtitle">
+                        One durable decision case. One evidence chain.
+                        Backend-generated state only.
+                    </p>
                 </div>
-                <div className="sequence-box"><span>TRACE SEQUENCE</span><strong>{lastSequence.current || '—'}</strong></div>
+
+                <div className="sequence-box">
+                    <span>
+                        DECISION CASE
+                    </span>
+
+                    <strong>
+                        {decisionId
+                            ? decisionId.slice(
+                                0,
+                                8
+                            )
+                            : '—'}
+                    </strong>
+
+                    <span>
+                        {dossier?.caseInfo.status ??
+                            'WAITING'}
+                        {' · '}
+                        TRACE{' '}
+                        {displayedSequence ||
+                            '—'}
+                    </span>
+                </div>
             </header>
 
             <ReplayPanel />
 
             <section className="stage-grid">
-                {STAGES.map(stage => {
-                    const event = latestByStage.get(stage)
-                    if (stage === 'SENSE') return <SenseCard key={stage} windowEvent={latestWindow} fallbackEvent={event} />
-                    if (stage === 'REASON') return <ReasonPanel key={stage} />
-                    if (stage === 'ACT') return <ActionPanel key={stage} />
-                    if (stage === 'VERIFY') return <VerifyPanel key={stage} />
-                    return null
-                })}
+                <SensePanel
+                    dossier={dossier}
+                    error={dossierError}
+                />
+
+                <ReasonPanel
+                    dossier={dossier}
+                    error={dossierError}
+                />
+
+                <ActionPanel
+                    dossier={dossier}
+                    error={dossierError}
+                />
+
+                <VerifyPanel
+                    dossier={dossier}
+                    error={dossierError}
+                />
             </section>
 
             <section className="workspace">
                 <div className="event-tape">
                     <div className="panel-heading">
-                        <div><span className="panel-kicker">LIVE EVENT TAPE</span><h2>Durable decision stream</h2></div>
-                        <button className={followLive ? 'follow active' : 'follow'} onClick={() => { setFollowLive(value => !value); setSelectedSnapshot(null) }}>{followLive ? '● Following live' : 'Follow live'}</button>
+                        <div>
+                            <span className="panel-kicker">
+                                DECISION PROOF LEDGER
+                            </span>
+
+                            <h2>
+                                One case · ordered backend evidence
+                            </h2>
+                        </div>
+
+                        <button
+                            className={
+                                followLive
+                                    ? 'follow active'
+                                    : 'follow'
+                            }
+                            onClick={
+                                () => {
+                                    if (followLive) {
+                                        setFollowLive(false)
+                                        setSelectedSnapshot(
+                                            latest
+                                        )
+                                    } else {
+                                        setSelectedSnapshot(
+                                            null
+                                        )
+                                        setFollowLive(true)
+                                    }
+                                }
+                            }
+                        >
+                            {followLive
+                                ? '● Following case'
+                                : 'Follow case'}
+                        </button>
                     </div>
+
                     <div className="tape-list">
-                        {visibleTape.length === 0 && <div className="empty">Waiting for operation traces...</div>}
-                        {visibleTape.map(item => (
-                            <button key={item.sequence} className={`trace-row trace-${item.stage.toLowerCase()} ${selected?.sequence === item.sequence ? 'selected' : ''}`} onClick={() => { setFollowLive(false); setSelectedSnapshot(item) }}>
-                                <span className="trace-sequence">#{item.sequence}</span><span className={`stage-pill pill-${item.stage.toLowerCase()}`}>{item.stage}</span><span className="trace-time">{formatTime(item.recordedAt)}</span><span className="trace-content"><strong>{item.eventType}</strong><span>{item.summary}</span></span>
-                            </button>
-                        ))}
+                        {!dossier && (
+                            <div className="empty">
+                                Waiting for a decision case...
+                            </div>
+                        )}
+
+                        {dossier &&
+                            visibleTape.length ===
+                            0 && (
+                                <div className="empty">
+                                    Case exists but no proof events are available.
+                                </div>
+                            )}
+
+                        {visibleTape.map(
+                            item => (
+                                <button
+                                    key={
+                                        item.sequence
+                                    }
+                                    className={
+                                        `trace-row trace-${item.stage.toLowerCase()} ${
+                                            selected?.sequence ===
+                                            item.sequence
+                                                ? 'selected'
+                                                : ''
+                                        }`
+                                    }
+                                    onClick={
+                                        () => {
+                                            setFollowLive(
+                                                false
+                                            )
+
+                                            setSelectedSnapshot(
+                                                item
+                                            )
+                                        }
+                                    }
+                                >
+                                    <span className="trace-sequence">
+                                        #{item.sequence}
+                                    </span>
+
+                                    <span
+                                        className={
+                                            `stage-pill pill-${item.stage.toLowerCase()}`
+                                        }
+                                    >
+                                        {item.stage}
+                                    </span>
+
+                                    <span className="trace-time">
+                                        {formatTime(
+                                            item.recordedAt
+                                        )}
+                                    </span>
+
+                                    <span className="trace-content">
+                                        <strong>
+                                            {item.eventType}
+                                        </strong>
+
+                                        <span>
+                                            {item.summary}
+                                        </span>
+                                    </span>
+                                </button>
+                            )
+                        )}
                     </div>
                 </div>
 
                 <aside className="evidence-panel">
-                    <span className="panel-kicker">SELECTED EVIDENCE</span>
-                    {selected ? <>
-                        <h2>{selected.eventType}</h2>
-                        <div className="detail-grid">
-                            <div><span>Stage</span><strong>{selected.stage}</strong></div><div><span>Sequence</span><strong>#{selected.sequence}</strong></div>
-                            <div><span>Event time</span><strong>{formatTime(selected.eventTime)}</strong></div><div><span>Recorded</span><strong>{formatTime(selected.recordedAt)}</strong></div>
-                        </div>
-                        <div className="evidence-block"><span>Situation</span><code>{selected.situationId ?? 'Not created yet'}</code></div>
-                        <div className="evidence-block"><span>Scope</span><code>{selected.scopeKey ?? '—'}</code></div>
-                        <div className="evidence-block"><span>Source event</span><code>{selected.sourceEventId ?? '—'}</code></div>
-                        <div className="evidence-block"><span>Evidence</span><p>{formatEvidence(selected.evidence) || 'No evidence payload'}</p></div>
-                    </> : <p>No trace selected.</p>}
+                    <span className="panel-kicker">
+                        SELECTED PROOF
+                    </span>
+
+                    {selected ? (
+                        <>
+                            <h2>
+                                {selected.eventType}
+                            </h2>
+
+                            <div className="detail-grid">
+                                <div>
+                                    <span>
+                                        Stage
+                                    </span>
+
+                                    <strong>
+                                        {selected.stage}
+                                    </strong>
+                                </div>
+
+                                <div>
+                                    <span>
+                                        Sequence
+                                    </span>
+
+                                    <strong>
+                                        #{selected.sequence}
+                                    </strong>
+                                </div>
+
+                                <div>
+                                    <span>
+                                        Event time
+                                    </span>
+
+                                    <strong>
+                                        {formatTime(
+                                            selected.eventTime
+                                        )}
+                                    </strong>
+                                </div>
+
+                                <div>
+                                    <span>
+                                        Recorded
+                                    </span>
+
+                                    <strong>
+                                        {formatTime(
+                                            selected.recordedAt
+                                        )}
+                                    </strong>
+                                </div>
+                            </div>
+
+                            <div className="evidence-block">
+                                <span>
+                                    Decision
+                                </span>
+
+                                <code>
+                                    {selected.decisionId ??
+                                        '—'}
+                                </code>
+                            </div>
+
+                            <div className="evidence-block">
+                                <span>
+                                    Situation
+                                </span>
+
+                                <code>
+                                    {selected.situationId ??
+                                        'Not created yet'}
+                                </code>
+                            </div>
+
+                            <div className="evidence-block">
+                                <span>
+                                    Scope
+                                </span>
+
+                                <code>
+                                    {selected.scopeKey ??
+                                        '—'}
+                                </code>
+                            </div>
+
+                            <div className="evidence-block">
+                                <span>
+                                    Source event
+                                </span>
+
+                                <code>
+                                    {selected.sourceEventId ??
+                                        '—'}
+                                </code>
+                            </div>
+
+                            <div className="evidence-block">
+                                <span>
+                                    Evidence
+                                </span>
+
+                                <p>
+                                    {formatEvidence(
+                                            selected.evidence
+                                        ) ||
+                                        'No evidence payload'}
+                                </p>
+                            </div>
+                        </>
+                    ) : (
+                        <p>
+                            No case-scoped proof selected.
+                        </p>
+                    )}
                 </aside>
             </section>
         </main>
     )
 }
 
-ReactDOM.createRoot(document.getElementById('root')!).render(<App />)
+ReactDOM
+    .createRoot(
+        document.getElementById(
+            'root'
+        )!
+    )
+    .render(
+        <App />
+    )

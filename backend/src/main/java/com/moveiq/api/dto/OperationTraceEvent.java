@@ -7,6 +7,7 @@ import java.util.UUID;
 public record OperationTraceEvent(
         long sequence,
         UUID sessionId,
+        UUID decisionId,
         UUID situationId,
         String sourceEventId,
         String scopeKey,

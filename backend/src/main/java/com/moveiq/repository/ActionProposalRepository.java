@@ -9,8 +9,20 @@ import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
-public interface ActionProposalRepository extends JpaRepository<ActionProposalEntity, UUID> {
+public interface ActionProposalRepository
+        extends JpaRepository<ActionProposalEntity, UUID> {
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
-    @Query("select p from ActionProposalEntity p where p.id = :id")
-    Optional<ActionProposalEntity> findForUpdate(@Param("id") UUID id);
+    @Query("""
+            select p
+            from ActionProposalEntity p
+            where p.id = :id
+            """)
+    Optional<ActionProposalEntity> findForUpdate(
+            @Param("id") UUID id);
+
+    Optional<ActionProposalEntity>
+    findFirstBySituationIdAndActionType(
+            UUID situationId,
+            String actionType);
 }

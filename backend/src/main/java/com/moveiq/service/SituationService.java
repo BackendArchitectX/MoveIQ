@@ -10,6 +10,7 @@ import com.moveiq.repository.SituationRepository;
 import com.moveiq.store.SituationContributionStore;
 import com.moveiq.store.SituationStore;
 import java.util.Map;
+import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -50,6 +51,19 @@ public class SituationService {
         outbox.save(new OutboxEventEntity(
                 "Situation", situation.getId().toString(), "SITUATION_UPDATED", payload(situation, signal)));
         return situation;
+    }
+
+    @Transactional(readOnly = true)
+    public SituationEntity requireById(
+            UUID situationId) {
+
+        return situations.findById(
+                        situationId)
+                .orElseThrow(
+                        () ->
+                                new IllegalStateException(
+                                        "Situation does not exist: "
+                                                + situationId));
     }
 
     private String payload(SituationEntity situation, DetectedSignal signal) {

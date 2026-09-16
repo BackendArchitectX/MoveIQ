@@ -3,6 +3,7 @@ export type TraceStage = 'SENSE' | 'REASON' | 'ACT' | 'VERIFY'
 export type OperationTraceEvent = {
     sequence: number
     sessionId: string | null
+    decisionId: string | null
     situationId: string | null
     sourceEventId: string | null
     scopeKey: string | null
@@ -43,8 +44,6 @@ export async function loadTraceHistory(
                     ? body.value
                     : []
 
-        // Catch-up may span a very large durable history. Advance through every page so
-        // lastSequence reaches the live frontier, but retain only the UI working set.
         retained = [...retained, ...batch].slice(-TRACE_RETENTION)
 
         if (batch.length < PAGE_SIZE) {
