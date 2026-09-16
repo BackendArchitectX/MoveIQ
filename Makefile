@@ -1,6 +1,6 @@
 MVN ?= mvn
 
-.PHONY: setup infra test backend frontend demo clean
+.PHONY: setup infra test backend frontend dev up demo down clean
 
 setup:
 	cd frontend && npm install
@@ -18,8 +18,16 @@ backend:
 frontend:
 	cd frontend && npm run dev
 
-demo: infra
+dev: infra setup
 	$(MAKE) -j2 backend frontend
+
+up:
+	docker compose up --build
+
+demo: up
+
+down:
+	docker compose down
 
 clean:
 	cd backend && $(MVN) clean

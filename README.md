@@ -80,24 +80,28 @@ data/moveinsync/raw/
 
 The source files stay Git-ignored. `GET /api/v1/data/status` validates placement, `GET /api/v1/data/profile` performs streaming quality profiling, and `POST /api/v1/data/ingest/trips` streams the three trip files into canonical PostgreSQL rows in bounded batches.
 
-## Run locally
+## Run locally — one command
+
+Install Docker Desktop / Docker Compose, then run this from the repository root:
 
 ```bash
-make infra
-make backend
-make frontend
+docker compose up --build
 ```
 
-Or:
+That single command builds and starts PostgreSQL, Redis, Kafka, the Spring Boot backend, and the React frontend. The frontend container proxies `/api/*` (including SSE) to the backend, so no separate backend/frontend terminals are required.
 
-```bash
-make demo
-```
-
+- Frontend: `http://localhost:5173`
 - Backend: `http://localhost:8080`
 - Swagger: `http://localhost:8080/swagger-ui.html`
 - Actuator: `http://localhost:8080/actuator`
-- Frontend: `http://localhost:5173`
+
+Stop the stack with `Ctrl+C`. To remove the containers afterward:
+
+```bash
+docker compose down
+```
+
+For local hot-reload development without containerizing the application processes, `make dev` still starts the infrastructure and launches Maven + Vite together.
 
 ## Useful endpoints
 
